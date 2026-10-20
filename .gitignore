@@ -1,0 +1,8 @@
+/bin/
+/web/node_modules/
+/web/dist/
+/internal/webui/dist/
+/.runtime/
+*.exe
+*.test
+coverage.out

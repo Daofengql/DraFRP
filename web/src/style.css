@@ -1,0 +1,7 @@
+:root { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
+body { margin: 0; }
+a { color: inherit; }
+.mono { font-family: "Cascadia Code", Consolas, monospace; font-size: .8rem; overflow-wrap: anywhere; }
+.resource-table td { vertical-align: top; }
+.resource-table th { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
