@@ -1,7 +1,7 @@
 {
   "status": "passed",
   "branch": "codex/preview-implementation",
-  "source_base_commit": "3d76fc72649ce4f4b39a258c8c41e0c16f337fea",
+  "source_base_commit": "a7acb1e",
   "windows": {
     "go": "go1.26.10",
     "vet": "passed",
