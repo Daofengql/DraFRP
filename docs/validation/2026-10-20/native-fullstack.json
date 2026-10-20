@@ -1,0 +1,58 @@
+{
+  "status": "passed",
+  "binary_roles": [
+    "cloud",
+    "edge",
+    "client"
+  ],
+  "data_path": "Linux IP_TRANSPARENT with exact return routes",
+  "different_visitor_agent_namespaces": true,
+  "native_source": "IPv4 IP and port",
+  "capabilities": [
+    "native_tcp_ipv4_ip_port",
+    "native_udp_ipv4_ip_port"
+  ],
+  "cases": [
+    {
+      "protocol": "tcp",
+      "transport": "quic_only",
+      "actual_visitor": "<redacted>:54025",
+      "target_observed_same_ip_port": true,
+      "bytes": 131072
+    },
+    {
+      "protocol": "udp",
+      "transport": "quic_only",
+      "actual_visitor": "<redacted>:53463",
+      "target_observed_same_ip_port": true,
+      "max_bytes": 60000,
+      "zero_length": true
+    },
+    {
+      "protocol": "tcp",
+      "transport": "tls_only",
+      "actual_visitor": "<redacted>:59785",
+      "target_observed_same_ip_port": true,
+      "bytes": 131072
+    },
+    {
+      "protocol": "udp",
+      "transport": "tls_only",
+      "actual_visitor": "<redacted>:35116",
+      "target_observed_same_ip_port": true,
+      "max_bytes": 60000,
+      "zero_length": true
+    }
+  ],
+  "wrong_source_udp_dropped": true,
+  "udp_public_response_source_checked": true,
+  "all_four_rules_ready": true,
+  "active_flow_revocation": true,
+  "revoked_protocols": [
+    "tcp",
+    "udp"
+  ],
+  "binding_fingerprint_matches_cloud": true,
+  "owned_network_cleanup": true,
+  "host_network_mutations": false
+}

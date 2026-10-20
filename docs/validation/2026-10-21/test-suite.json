@@ -1,0 +1,39 @@
+{
+  "status": "passed_after_targeted_repairs",
+  "go_toolchain": "go1.26.10",
+  "database": "dedicated MySQL 8.4",
+  "redis": "dedicated Redis 7.4",
+  "windows": {
+    "initial_command": "go test -race ./... -count=1 -timeout=12m",
+    "all_packages_except_systemtest_passed": true,
+    "initial_failures": ["TestFullSystem/quic", "TestFullSystem/tls"],
+    "systemtest_final_command": "go test -race ./internal/systemtest -count=1 -timeout=6m",
+    "systemtest_final_exit_code": 0,
+    "systemtest_final_seconds": 114.431
+  },
+  "linux": {
+    "host": "dedicated Hyper-V Ubuntu VM",
+    "initial_command": "go test -race ./... -count=1 -timeout=12m",
+    "all_packages_except_systemtest_passed": true,
+    "initial_failures": ["TestShortTTLIndependentRenewalAdmission/quic"],
+    "systemtest_final_command": "go test -race ./internal/systemtest -count=1 -timeout=6m",
+    "systemtest_final_exit_code": 0,
+    "systemtest_final_seconds": 39.487,
+    "short_ttl_targeted_race_repetitions": 3,
+    "short_ttl_targeted_seconds": 87.210
+  },
+  "repairs": [
+    "Manual-sync FullSystem uses a one-minute lease and maintains both Agent carriers before asserting the shared account cap. Dedicated short-TTL tests still exercise ten-second independent renewals and revocation.",
+    "QUIC admission rejection accepts a typed explicit remote application close with code zero when the reason Result is overtaken by connection teardown; still rejects success, timeout and local cancellation, and checks carrier closure and zero active edge carriers/flows."
+  ],
+  "vet": "passed",
+  "go_mod_verify": "passed",
+  "frontend": {
+    "typecheck": "passed",
+    "format": "passed",
+    "tests": 8,
+    "windows_release_build": "passed",
+    "linux_release_build": "passed"
+  },
+  "note": "The initial whole-suite runs contained the listed failures. Each platform's complete systemtest package passed after the test repairs; other packages had passed in the initial runs. Native opt-in and shaping tests are documented separately."
+}

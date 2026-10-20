@@ -1,7 +1,50 @@
-:root { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
-body { margin: 0; }
-a { color: inherit; }
-.mono { font-family: "Cascadia Code", Consolas, monospace; font-size: .8rem; overflow-wrap: anywhere; }
-.resource-table td { vertical-align: top; }
-.resource-table th { white-space: nowrap; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+body {
+  margin: 0;
+}
+a {
+  color: inherit;
+}
+.mono {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.resource-table td {
+  vertical-align: top;
+}
+.resource-table th {
+  white-space: nowrap;
+}
+.resource-table td {
+  padding: 14px 16px;
+}
+.resource-table {
+  min-width: 660px;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 24px;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+}
+button,
+a {
+  touch-action: manipulation;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

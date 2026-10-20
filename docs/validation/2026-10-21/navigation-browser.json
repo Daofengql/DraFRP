@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "backend": "Windows release cloud with real MySQL 8.4",
+  "browser": "Playwright Chromium",
+  "build_id": "0.1.0-preview+3d76fc7",
+  "app_source_sha256": "cc5d8a555a2d8d503708ae874e703e35dd5d83e022254b33dd021337aa937070",
+  "desktop": {
+    "admin_top_level_entries": 5,
+    "overview_initial_expanded_groups": 0,
+    "overview_initial_links": ["概览", "用量"],
+    "groups": ["连接管理", "网络资源", "平台管理"],
+    "one_expanded_group_at_a_time": true,
+    "group_children_are_indented": true,
+    "direct_device_detail_expands_connections": true,
+    "device_detail_selects_devices_link": true,
+    "group_breadcrumb_visible": true,
+    "space_and_enter_toggle": true
+  },
+  "ordinary_user": {
+    "actual_captcha_login": true,
+    "top_level_entries": 4,
+    "platform_group_absent": true
+  },
+  "mobile": {
+    "viewport": [390, 844],
+    "document_width": 390,
+    "drawer_title_not_covered_by_appbar": true,
+    "group_toggle_keeps_drawer_open": true,
+    "one_expanded_group_at_a_time": true,
+    "leaf_navigation_closes_drawer": true,
+    "escape_closes_drawer": true
+  },
+  "checks": ["TypeScript", "Prettier", "8 frontend tests", "Windows release build", "Linux release build"],
+  "screenshots": ["output/playwright/navigation-desktop.png", "output/playwright/navigation-mobile.png"]
+}

@@ -6,3 +6,11 @@
 *.exe
 *.test
 coverage.out
+/.native-test-*
+/web/tsconfig.tsbuildinfo
+/.client-test-linux
+/.edge-test-linux
+/.shaping-test-linux
+/.playwright-cli/
+/output/
+__pycache__/

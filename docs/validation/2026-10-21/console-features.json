@@ -1,0 +1,55 @@
+{
+  "status": "passed",
+  "backend": "Windows release cloud with real MySQL 8.4",
+  "browser": "Playwright Chromium",
+  "authentication": {
+    "captcha_login_verified_again": true,
+    "embedded_build_id": "0.1.0-preview+3d76fc7",
+    "false_upgrade_alert": false
+  },
+  "ports": {
+    "resources": 183,
+    "page_size": 50,
+    "second_page": "51–100 / 183",
+    "second_page_first": "TCP / 26125",
+    "does_not_reset_to_first": true,
+    "tcp_filter_resets_page": true,
+    "tcp_total": 91,
+    "udp_rows_when_tcp_filtered": 0
+  },
+  "acl_simulation": {
+    "rule_without_acl_allowed": true,
+    "saved_draft_default_deny": true,
+    "published_version": 3,
+    "published_matched_entry": "browser-allow",
+    "published_allowed": true,
+    "saved_draft_version": 4,
+    "unsaved_draft_preview_allowed": true,
+    "preview_did_not_save": true,
+    "persisted_default_action_after_preview": "deny",
+    "persisted_resource_version_after_preview": 4
+  },
+  "short_lease_release_check": {
+    "actual_windows_release_agent_and_edge": true,
+    "lease_seconds": 10,
+    "actual_quic_echo": true,
+    "active_flows": 1,
+    "quic_carriers": 1,
+    "source": "live-runtime-3 public.json and completed process result",
+    "owned_runtime_processes_stopped": true,
+    "test_rule_deleted": true
+  },
+  "device_runtime": {
+    "actual_release_agent_and_edge": true,
+    "actual_quic_echo": true,
+    "active_flows": 1,
+    "quic_carriers": 1,
+    "ui_observation_visible": true,
+    "handshake_not_claimed_as_rtt": true,
+    "expired_session_runtime_hidden": true,
+    "no_data_notice_after_expiry": true,
+    "owned_runtime_processes_stopped": true,
+    "test_rule_deleted": true,
+    "lease_seconds_in_this_browser_check": 30
+  }
+}

@@ -1,0 +1,21 @@
+[Unit]
+Description=DraFRP edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=drafrp
+Group=drafrp
+ExecStart=/usr/local/bin/drafrp-edge --config /etc/drafrp/edge.json
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

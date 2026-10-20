@@ -1,0 +1,41 @@
+name: Verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-fixture-not-a-secret
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-fixture-not-a-secret --silent"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=10
+    env:
+      DRAFRP_TEST_MYSQL_DSN: root:ci-fixture-not-a-secret@tcp(127.0.0.1:3306)/
+      DRAFRP_TEST_REDIS_ADDRESS: 127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: go test -race ./... -count=1 -timeout=5m
+      - run: npm ci --no-audit --no-fund && npm test && npm run format:check
+        working-directory: web
+      - run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+        working-directory: web
+      - run: bash scripts/build.sh ci linux amd64

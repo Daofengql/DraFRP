@@ -1,0 +1,20 @@
+[Unit]
+Description=DraFRP socket agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=drafrp
+Group=drafrp
+StateDirectory=drafrp-client
+ExecStart=/usr/local/bin/drafrp-client --config /etc/drafrp/client.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

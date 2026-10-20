@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "binary_roles": [
+    "cloud",
+    "edge",
+    "client"
+  ],
+  "tcp_large_bytes": 524288,
+  "udp_max_tested_bytes": 48000,
+  "zero_length_udp": true,
+  "active_flow_revocation": true,
+  "release_console_embedded": true,
+  "connect_echo_close_ms_median": 2.37310650118161,
+  "connect_echo_close_ms_p95": 3.0881800048518926,
+  "samples": 12,
+  "note": "loopback smoke timing; not a WAN/frp performance comparison",
+  "go_toolchain": "go1.26.10",
+  "lease_seconds": 10,
+  "release_version": "0.1.0-preview+3d76fc7",
+  "binaries_sha256": {
+    "drafrp-cloud": "2bb656f37353fa199814d470947309c10cc5d7c558dfba2ed7452b32327f4ef1",
+    "drafrp-client": "1ad37029da8222192bf2cd857a136065ead8e51a71a3b4bb786d381e9474551f",
+    "drafrp-edge": "04ba7813d1200a2ad976b09097afc63938b20a4ab37b1d21cfdaae411126fd4f"
+  },
+  "owned_database_dropped": true,
+  "private_config_removed": true
+}

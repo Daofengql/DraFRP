@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "go_toolchain": "go1.26.10",
+  "govulncheck_version": "v1.9.0",
+  "go_scan_mode": "source with call analysis",
+  "reachable_vulnerabilities": 0,
+  "imported_package_vulnerabilities": 0,
+  "unused_module_advisories": 1,
+  "unused_module_note": "unmaintained golang.org/x/crypto/openpgp; this project does not import OpenPGP",
+  "npm_registry": "https://registry.npmjs.org",
+  "npm_vulnerabilities": 0,
+  "router_version": "7.18.4",
+  "vite_version": "7.3.7",
+  "quic_go_version": "v0.59.1",
+  "x_crypto_version": "v0.56.0",
+  "note": "A source scan run by a newer toolchain does not validate binaries built by an older Go version. Release builds now use the pinned patched toolchain."
+}

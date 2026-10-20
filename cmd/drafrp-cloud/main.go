@@ -2,30 +2,38 @@ package main
 
 import (
 	"context"
+	"drafrp/internal/buildinfo"
 	"drafrp/internal/cloud"
-	"encoding/json"
+	"drafrp/internal/config"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
 	cfgPath := flag.String("config", "", "JSON config path")
+	version := flag.Bool("version", false, "print version")
 	flag.Parse()
+	if *version {
+		log.Print(buildinfo.String())
+		return
+	}
 	var c cloud.Config
 	if *cfgPath != "" {
-		b, e := os.ReadFile(*cfgPath)
-		if e != nil {
-			log.Fatal(e)
-		}
-		if e = json.Unmarshal(b, &c); e != nil {
+		if e := config.Read(*cfgPath, &c); e != nil {
 			log.Fatal(e)
 		}
 	}
-	c.Listen = os.Getenv("DRAFRP_LISTEN")
+	if c.BuildID == "" {
+		c.BuildID = buildinfo.ID()
+	}
+	if v := os.Getenv("DRAFRP_LISTEN"); v != "" {
+		c.Listen = v
+	}
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}
@@ -36,10 +44,23 @@ func main() {
 		log.Fatal(e)
 	}
 	defer s.Close()
-	srv := &http.Server{Addr: c.Listen, Handler: s.Handler(), ReadHeaderTimeout: 10 * 1e9, ReadTimeout: 30 * 1e9, WriteTimeout: 30 * 1e9, IdleTimeout: 120 * 1e9}
-	go func() { <-ctx.Done(); _ = srv.Shutdown(context.Background()) }()
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		log.Fatal("tls_cert and tls_key must be configured together")
+	}
+	srv := &http.Server{Addr: c.Listen, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdown)
+	}()
 	log.Printf("drafrp-cloud listening on %s", c.Listen)
-	if e = srv.ListenAndServe(); e != nil && e != http.ErrServerClosed {
+	if c.TLSCert != "" {
+		e = srv.ListenAndServeTLS(c.TLSCert, c.TLSKey)
+	} else {
+		e = srv.ListenAndServe()
+	}
+	if e != nil && e != http.ErrServerClosed {
 		log.Fatal(e)
 	}
 }

@@ -1,0 +1,35 @@
+name: drafrp
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: drafrp
+      MYSQL_USER: drafrp
+      MYSQL_PASSWORD: ${DRAFRP_DB_PASSWORD:?set DRAFRP_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DRAFRP_DB_ROOT_PASSWORD:?set DRAFRP_DB_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  cloud:
+    build:
+      context: ..
+      target: cloud
+    environment:
+      DRAFRP_LISTEN: :8080
+      DRAFRP_MYSQL_DSN: drafrp:${DRAFRP_DB_PASSWORD}@tcp(mysql:3306)/drafrp?charset=utf8mb4
+      DRAFRP_STORAGE_KEY: ${DRAFRP_STORAGE_KEY:?set a persistent base64 AES key}
+      DRAFRP_ADMIN_USERNAME: ${DRAFRP_ADMIN_USERNAME:-admin}
+      DRAFRP_ADMIN_PASSWORD: ${DRAFRP_ADMIN_PASSWORD:?set initial admin password}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  mysql-data:

@@ -1,0 +1,23 @@
+{
+  "cloud_url": "https://control.example.com",
+  "edge_id": "REPLACE_WITH_EDGE_ID_FROM_CONSOLE",
+  "token": "REPLACE_WITH_RANDOM_EDGE_TOKEN",
+  "cert_file": "/etc/drafrp/carrier.crt",
+  "key_file": "/etc/drafrp/carrier.key",
+  "listen_host": "0.0.0.0",
+  "sync_interval": "20s",
+  "max_connections": 1024,
+  "max_udp_sessions": 128,
+  "max_packets_per_second": 20000,
+  "max_pending_handshakes": 32,
+  "max_carriers_per_device": 8,
+  "udp_idle_timeout": "30s",
+  "wire_shaping": {
+    "interface": "eth0",
+    "dedicated_interface": true,
+    "state_dir": "/var/lib/drafrp-edge/wire",
+    "rate_bps": 100000000,
+    "burst_bytes": 65536,
+    "latency": "50ms"
+  }
+}

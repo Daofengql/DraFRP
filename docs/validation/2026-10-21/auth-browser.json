@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "backend": "release cloud with real MySQL 8.4",
+  "browser": "Playwright Chromium",
+  "captcha_required": true,
+  "registration_enabled": true,
+  "captcha_image_visually_read": true,
+  "wrong_captcha_rejected_and_refreshed": true,
+  "password_confirmation_mismatch_blocked": true,
+  "valid_case_insensitive_captcha_registered": true,
+  "registration_did_not_create_session": true,
+  "login_with_fresh_captcha": true,
+  "binding_return_path_preserved": true,
+  "binding_fingerprint_verified": true,
+  "registered_user_bound_device": true,
+  "administrator_api_denied_403": true,
+  "administrator_navigation_hidden": true,
+  "other_tenant_devices_hidden": true,
+  "cloud_restart_persisted_registered_account_and_binding": true,
+  "admin_rule_persisted_after_restart": true,
+  "mobile_viewport": [
+    390,
+    844
+  ],
+  "mobile_horizontal_overflow": false
+}

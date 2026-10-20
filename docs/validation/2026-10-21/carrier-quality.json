@@ -1,0 +1,76 @@
+{
+  "status": "passed",
+  "stream_cancellation_regression": {
+    "defect": "failed yamux OpenStream boxed a typed nil as Stream; late cancellation cleanup panicked in SetDeadline",
+    "old_code_overlay_reproduced_exact_panic": true,
+    "open_and_accept_failure_interfaces_normalized": true,
+    "deterministic_cancel_before_close_test": true,
+    "concurrent_cancel_close_workers": 16,
+    "concurrent_cancel_close_iterations": 16,
+    "late_successful_stream_cleaned_without_closing_carrier": true,
+    "subsequent_business_stream_verified": true,
+    "windows_targeted_race_repetitions": 10,
+    "linux_targeted_race_repetitions": 10,
+    "windows_full_protocol_client_edge_race_passed": true,
+    "linux_full_protocol_client_edge_race_passed": true,
+    "vet_passed": true
+  },
+  "transports": ["real TLS 1.3 + yamux", "real QUIC"],
+  "probe": {
+    "capability": "probe_version=1 in admission hello/challenge; enabled only after successful authentication",
+    "frame_bytes": 24,
+    "interval_ms": 5000,
+    "next_attempt_scheduled_from_actual_last_attempt": true,
+    "old_independent_ticker_overlay_reproduced_skipped_attempts": true,
+    "real_tls_and_quic_each_observed_two_successes_within_six_seconds": true,
+    "real_sample_start_gap_at_least_five_seconds": true,
+    "timeout_ms": 2000,
+    "window_samples": 64,
+    "window_max_age_seconds": 320,
+    "max_inflight_per_carrier": 1,
+    "edge_min_accept_interval_ms": 1000,
+    "current_snapshot_and_device_authorization_rechecked": true,
+    "local_cancellation_excluded": true,
+    "business_active_flow_count_unchanged": true,
+    "old_peer_business_forwarding_preserved": true,
+    "old_signed_runtime_payload_bytes_preserved": true,
+    "successful_zero_timer_tick_samples_preserved_and_distinct_from_missing_data": true,
+    "retired_session_observations_cleared": true
+  },
+  "native_quic": {
+    "source": "quic-go ConnectionStats / RFC 9002",
+    "rtt": ["latest", "smoothed", "minimum"],
+    "connection_counters": ["packets_sent", "packets_received", "bytes_sent", "bytes_received"],
+    "current_loss_gauges": ["packets_lost", "bytes_lost"],
+    "loss_gauges_may_decrease_after_late_packets": true,
+    "ip_loss_rate_or_retransmission_count_inferred": false
+  },
+  "windows": {
+    "full_protocol_client_edge_race_passed": true,
+    "model_cloud_targeted_race_passed": true,
+    "real_mysql_signed_quality_persistence_and_tampering_rejection_passed": true,
+    "short_ttl_independent_renewal_business_flow_and_quality_race_seconds": 47.145,
+    "vet_passed": true
+  },
+  "hyperv_linux": {
+    "go_toolchain": "go1.26.10",
+    "targeted_protocol_model_client_cloud_system_race_passed": true,
+    "short_ttl_independent_renewal_business_flow_and_quality_race_seconds": 30.859,
+    "latest_probe_concurrency_and_slow_sender_race_seconds": 7.307,
+    "vet_passed": true
+  },
+  "web": {
+    "unit_tests": 11,
+    "typecheck_passed": true,
+    "production_build_passed": true,
+    "browser": "Playwright Chromium, isolated display fixture; backend separately tested with real MySQL and carriers",
+    "desktop_viewport": [1440, 1100],
+    "mobile_viewport": [390, 844],
+    "mobile_document_scroll_width": 390,
+    "mobile_quality_cards_visible_without_horizontal_table_scrolling": true,
+    "timeout_only_window_shows_unobserved_rtt": true,
+    "legacy_peer_shows_unobserved_rtt": true,
+    "console_errors": 0,
+    "timeout_rate_explicitly_distinguished_from_ip_packet_loss": true
+  }
+}

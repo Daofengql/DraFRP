@@ -1,17 +1,21 @@
-// Package client implements the outbound DraFRP agent.
+// Package client implements the outbound, independently authorized agent.
 package client
 
 import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
+	"crypto/sha256"
+	"drafrp/internal/model"
+	"drafrp/internal/native"
+	"drafrp/internal/protocol"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,22 +23,31 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"drafrp/internal/model"
-	"drafrp/internal/protocol"
-	"github.com/quic-go/quic-go"
 )
 
 type Config struct {
-	CloudURL     string        `json:"cloud_url"`
-	CAFile       string        `json:"ca_file"`
-	StateDir     string        `json:"state_dir"`
-	Name         string        `json:"name"`
-	SyncInterval time.Duration `json:"sync_interval"`
-	Transport    string        `json:"transport"`
-	Bind         bool          `json:"bind"`
-	BindCode     string        `json:"bind_code"`
-	PollToken    string        `json:"poll_token"`
+	CloudURL           string        `json:"cloud_url"`
+	CAFile             string        `json:"ca_file"`
+	OriginCAFile       string        `json:"origin_ca_file"`
+	StateDir           string        `json:"state_dir"`
+	Name               string        `json:"name"`
+	SyncInterval       time.Duration `json:"sync_interval"`
+	Transport          string        `json:"transport"`
+	NetworkMode        string        `json:"network_mode"`
+	AllowedTargetCIDRs []string      `json:"allowed_target_cidrs"`
+	AllowedTargetPorts []int         `json:"allowed_target_ports"`
+	MaxCarriersPerEdge int           `json:"max_carriers_per_edge"`
+	Bind               bool          `json:"bind"`
+	NativeReturnCIDRs  []string      `json:"native_return_cidrs"`
+	NativeFlowLimit    int           `json:"native_flow_limit"`
+}
+
+// PublicKeyFingerprint matches the console binding inspection contract:
+// SHA-256 of the standard Base64 public key, encoded as lowercase hex.
+func (a *Agent) PublicKeyFingerprint() string {
+	public := base64.StdEncoding.EncodeToString(a.key.Public().(ed25519.PublicKey))
+	sum := sha256.Sum256([]byte(public))
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *Config) defaults() {
@@ -42,33 +55,58 @@ func (c *Config) defaults() {
 		c.SyncInterval = 20 * time.Second
 	}
 	if c.StateDir == "" {
-		if v := os.Getenv("DRAFRP_STATE_DIR"); v != "" {
-			c.StateDir = v
-		} else {
+		c.StateDir = os.Getenv("DRAFRP_STATE_DIR")
+		if c.StateDir == "" {
 			c.StateDir = ".drafrp"
 		}
 	}
 	if c.Transport == "" {
 		c.Transport = "auto"
 	}
+	if c.NetworkMode == "" {
+		c.NetworkMode = "socket"
+	}
+	if c.MaxCarriersPerEdge <= 0 {
+		c.MaxCarriersPerEdge = 2
+	}
 }
 
 type state struct {
-	DeviceID   string `json:"device_id"`
-	PrivateKey string `json:"private_key"`
-	SessionID  string `json:"session_id"`
-	Generation uint64 `json:"generation"`
-	Name       string `json:"name"`
+	DeviceID   string              `json:"device_id"`
+	PrivateKey string              `json:"private_key"`
+	SessionID  string              `json:"session_id"`
+	Name       string              `json:"name"`
+	Pending    *model.BindResponse `json:"pending,omitempty"`
+}
+type activeFlow struct {
+	rule       model.Rule
+	edgeID     string
+	generation uint64
+	cancel     context.CancelFunc
+	carrier    *protocol.Carrier
 }
 type Agent struct {
-	cfg      Config
-	mu       sync.RWMutex
-	st       state
-	key      ed25519.PrivateKey
-	snap     model.ClientSnapshot
-	carriers map[string]*protocol.Carrier
-	closed   chan struct{}
-	wg       sync.WaitGroup
+	cfg            Config
+	mu             sync.RWMutex
+	syncMu         sync.Mutex
+	connectMu      sync.Mutex
+	st             state
+	key            ed25519.PrivateKey
+	snap           model.ClientSnapshot
+	carriers       map[string]*protocol.Carrier
+	carrierEdges   map[string]model.Edge
+	flows          map[protocol.Stream]activeFlow
+	transports     map[string]*http.Transport
+	http           *http.Client
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	once           sync.Once
+	closing        bool
+	stateLock      *os.File
+	native         *native.Manager
+	pendingStreams int
+	pathHealth     map[endpointKey]*endpointHealth
 }
 
 func New(c Config) (*Agent, error) {
@@ -76,34 +114,93 @@ func New(c Config) (*Agent, error) {
 	if c.CloudURL == "" {
 		return nil, errors.New("cloud_url is required")
 	}
-	a := &Agent{cfg: c, carriers: map[string]*protocol.Carrier{}, closed: make(chan struct{})}
-	if e := a.load(); e != nil {
-		return nil, e
+	u, err := url.Parse(c.CloudURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("invalid cloud_url")
 	}
-	if a.st.DeviceID == "" {
-		pub, k, e := ed25519.GenerateKey(rand.Reader)
-		if e != nil {
+	if c.Transport != "auto" && c.Transport != "quic_only" && c.Transport != "tls_only" {
+		return nil, errors.New("invalid transport")
+	}
+	if c.NetworkMode != "socket" && c.NetworkMode != "tun" && c.NetworkMode != "transparent" {
+		return nil, errors.New("invalid network_mode")
+	}
+	if c.MaxCarriersPerEdge > 8 {
+		return nil, errors.New("max_carriers_per_edge must be <=8")
+	}
+	for _, s := range c.AllowedTargetCIDRs {
+		if _, e := parsePrefix(s); e != nil {
 			return nil, e
 		}
-		a.key = k
-		a.st.PrivateKey = base64.StdEncoding.EncodeToString(k)
-		if c.Name != "" {
-			a.st.Name = c.Name
-		}
-		_ = pub
-	} else {
-		b, e := base64.StdEncoding.DecodeString(a.st.PrivateKey)
-		if e != nil || len(b) != ed25519.PrivateKeySize {
-			return nil, errors.New("invalid persisted private key")
-		}
-		a.key = ed25519.PrivateKey(b)
 	}
+	for _, p := range c.AllowedTargetPorts {
+		if p < 1 || p > 65535 {
+			return nil, errors.New("invalid allowed target port")
+		}
+	}
+	h, e := protocol.HTTPClient(c.CAFile)
+	if e != nil {
+		return nil, e
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &Agent{cfg: c, http: h, ctx: ctx, cancel: cancel, carriers: map[string]*protocol.Carrier{}, carrierEdges: map[string]model.Edge{}, flows: map[protocol.Stream]activeFlow{}, transports: map[string]*http.Transport{}, pathHealth: map[endpointKey]*endpointHealth{}}
+	if e = os.MkdirAll(c.StateDir, 0700); e != nil {
+		cancel()
+		return nil, e
+	}
+	a.stateLock, e = lockState(filepath.Join(c.StateDir, "device.lock"))
+	if e != nil {
+		cancel()
+		return nil, e
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = a.stateLock.Close()
+			h.CloseIdleConnections()
+		}
+	}()
+	if e = a.load(); e != nil {
+		cancel()
+		return nil, e
+	}
+	if a.st.PrivateKey == "" {
+		_, k, e := ed25519.GenerateKey(rand.Reader)
+		if e != nil {
+			cancel()
+			return nil, e
+		}
+		a.st.PrivateKey = base64.StdEncoding.EncodeToString(k)
+	}
+	b, e := base64.StdEncoding.DecodeString(a.st.PrivateKey)
+	if e != nil || len(b) != ed25519.PrivateKeySize {
+		cancel()
+		return nil, errors.New("invalid persisted private key")
+	}
+	a.key = ed25519.PrivateKey(b)
+	a.st.SessionID = protocol.ID()
+	if c.Name != "" {
+		a.st.Name = c.Name
+	}
+	if a.st.Name == "" {
+		a.st.Name, _ = os.Hostname()
+	}
+	if e = a.save(); e != nil {
+		cancel()
+		return nil, e
+	}
+	if c.NetworkMode == "transparent" {
+		a.native, e = native.New(native.Config{StateDir: c.StateDir, ReturnCIDRs: c.NativeReturnCIDRs, MaxFlows: c.NativeFlowLimit})
+		if e != nil {
+			cancel()
+			return nil, e
+		}
+	}
+	a.wg.Add(1)
+	go a.watch()
+	ok = true
 	return a, nil
 }
 func (a *Agent) load() error {
-	if a.cfg.StateDir == "" {
-		return nil
-	}
 	b, e := os.ReadFile(filepath.Join(a.cfg.StateDir, "device.json"))
 	if os.IsNotExist(e) {
 		return nil
@@ -114,285 +211,257 @@ func (a *Agent) load() error {
 	return json.Unmarshal(b, &a.st)
 }
 func (a *Agent) save() error {
-	if err := os.MkdirAll(a.cfg.StateDir, 0700); err != nil {
-		return err
+	if e := os.MkdirAll(a.cfg.StateDir, 0700); e != nil {
+		return e
 	}
 	b, e := json.MarshalIndent(a.st, "", "  ")
 	if e != nil {
 		return e
 	}
-	tmp := filepath.Join(a.cfg.StateDir, "device.json.tmp")
-	if e = os.WriteFile(tmp, b, 0600); e != nil {
+	f, e := os.CreateTemp(a.cfg.StateDir, "device-*.tmp")
+	if e != nil {
 		return e
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if e = f.Chmod(0600); e == nil {
+		_, e = f.Write(b)
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	ce := f.Close()
+	if e != nil {
+		return e
+	}
+	if ce != nil {
+		return ce
 	}
 	return os.Rename(tmp, filepath.Join(a.cfg.StateDir, "device.json"))
 }
+func (a *Agent) Bound() bool { a.mu.RLock(); defer a.mu.RUnlock(); return a.st.DeviceID != "" }
 func (a *Agent) Close() {
-	select {
-	case <-a.closed:
-		return
-	default:
-		close(a.closed)
+	a.once.Do(func() {
+		a.mu.Lock()
+		a.closing = true
+		a.cancel()
+		for _, c := range a.carriers {
+			_ = c.Close()
+		}
+		for _, f := range a.flows {
+			f.cancel()
+		}
+		for _, t := range a.transports {
+			t.CloseIdleConnections()
+		}
+		a.mu.Unlock()
+		a.wg.Wait()
+		a.syncMu.Lock()
+		a.syncMu.Unlock()
+		a.connectMu.Lock()
+		a.connectMu.Unlock()
+		a.http.CloseIdleConnections()
+		if a.native != nil {
+			if err := a.native.Close(); err != nil {
+				log.Printf("native network cleanup: %v", err)
+			}
+		}
+		_ = a.stateLock.Close()
+	})
+}
+func (a *Agent) post(ctx context.Context, path string, in, out any) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(a.ctx, cancel)
+	defer stop()
+	b, e := json.Marshal(in)
+	if e != nil {
+		return e
 	}
-	a.mu.Lock()
-	for _, c := range a.carriers {
-		_ = c.Close()
+	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(a.cfg.CloudURL, "/")+"/api/v1/runtime/client/"+path, strings.NewReader(string(b)))
+	if e != nil {
+		return e
 	}
-	a.mu.Unlock()
-	a.wg.Wait()
+	req.Header.Set("Content-Type", "application/json")
+	res, e := a.http.Do(req)
+	if e != nil {
+		return e
+	}
+	defer res.Body.Close()
+	if res.StatusCode/100 != 2 {
+		var body struct {
+			Error struct{ Code, Message string }
+		}
+		_ = json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&body)
+		return fmt.Errorf("%s HTTP %d %s: %s", path, res.StatusCode, body.Error.Code, body.Error.Message)
+	}
+	return json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(out)
 }
 func (a *Agent) Bind(ctx context.Context) (model.BindResponse, error) {
-	if len(a.key) != ed25519.PrivateKeySize {
-		return model.BindResponse{}, errors.New("device key unavailable")
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return model.BindResponse{}, errors.New("agent closed")
 	}
-	client, e := protocol.HTTPClient(a.cfg.CAFile)
-	if e != nil {
-		return model.BindResponse{}, e
+	if a.st.DeviceID != "" {
+		a.mu.Unlock()
+		return model.BindResponse{}, errors.New("device is already bound; use a new state directory for a separate device")
 	}
-	req := model.BindRequest{Name: a.st.Name, PublicKey: base64.StdEncoding.EncodeToString(a.key.Public().(ed25519.PublicKey))}
-	b, _ := json.Marshal(req)
-	u := strings.TrimRight(a.cfg.CloudURL, "/") + "/api/v1/runtime/client/bind"
-	hr, _ := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
-	hr.Header.Set("Content-Type", "application/json")
-	res, e := client.Do(hr)
-	if e != nil {
-		return model.BindResponse{}, e
+	if p := a.st.Pending; p != nil && time.Now().Before(p.ExpiresAt) {
+		a.mu.Unlock()
+		return *p, nil
 	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return model.BindResponse{}, fmt.Errorf("bind: HTTP %s", res.Status)
+	in := model.BindRequest{Name: a.st.Name, PublicKey: base64.StdEncoding.EncodeToString(a.key.Public().(ed25519.PublicKey))}
+	a.mu.Unlock()
+	var out model.BindResponse
+	if e := a.post(ctx, "bind", in, &out); e != nil {
+		return out, e
 	}
-	var br model.BindResponse
-	if e = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&br); e != nil {
-		return br, e
-	}
-	return br, nil
-}
-func (a *Agent) PollBind(ctx context.Context, id, token string) (model.BindResponse, error) {
-	client, e := protocol.HTTPClient(a.cfg.CAFile)
-	if e != nil {
-		return model.BindResponse{}, e
-	}
-	b, _ := json.Marshal(map[string]string{"id": id, "poll_token": token})
-	u := strings.TrimRight(a.cfg.CloudURL, "/") + "/api/v1/runtime/client/bind/poll"
-	hr, _ := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
-	hr.Header.Set("Content-Type", "application/json")
-	res, e := client.Do(hr)
-	if e != nil {
-		return model.BindResponse{}, e
-	}
-	defer res.Body.Close()
-	var br model.BindResponse
-	_ = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&br)
-	if res.StatusCode/100 != 2 {
-		return br, fmt.Errorf("poll bind: HTTP %s", res.Status)
-	}
-	if br.Status == "approved" && br.DeviceID != "" {
-		a.st.DeviceID = br.DeviceID
-		a.st.SessionID = ""
-		if e = a.save(); e != nil {
-			return br, e
-		}
-	}
-	return br, nil
-}
-func (a *Agent) Sync(ctx context.Context) (model.ClientSnapshot, error) {
-	a.mu.RLock()
-	id, sess := a.st.DeviceID, a.st.SessionID
-	rev := a.snap.Revision
-	a.mu.RUnlock()
-	if id == "" {
-		return model.ClientSnapshot{}, errors.New("device is not bound")
-	}
-	ts := time.Now().Unix()
-	p := model.SyncPayload(id, sess, ts)
-	req := model.ClientSyncRequest{DeviceID: id, SessionID: sess, Timestamp: ts, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(a.key, p)), AppliedRevision: rev}
-	cl, e := protocol.HTTPClient(a.cfg.CAFile)
-	if e != nil {
-		return model.ClientSnapshot{}, e
-	}
-	b, _ := json.Marshal(req)
-	u := strings.TrimRight(a.cfg.CloudURL, "/") + "/api/v1/runtime/client/sync"
-	hr, _ := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
-	hr.Header.Set("Content-Type", "application/json")
-	res, e := cl.Do(hr)
-	if e != nil {
-		return model.ClientSnapshot{}, e
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return model.ClientSnapshot{}, fmt.Errorf("client sync: HTTP %s", res.Status)
-	}
-	var s model.ClientSnapshot
-	if e = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&s); e != nil {
-		return s, e
+	if out.ID == "" || out.PollToken == "" || !time.Now().Before(out.ExpiresAt) {
+		return out, errors.New("invalid binding challenge")
 	}
 	a.mu.Lock()
-	a.snap = s
-	if a.st.SessionID == "" {
-		a.st.SessionID = s.Device.SessionID
+	defer a.mu.Unlock()
+	a.st.Pending = &out
+	return out, a.save()
+}
+func (a *Agent) PollBind(ctx context.Context, id, token string) (model.BindResponse, error) {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	a.mu.RLock()
+	pending := a.st.Pending
+	valid := !a.closing && pending != nil && pending.ID == id && pending.PollToken == token && a.st.DeviceID == ""
+	a.mu.RUnlock()
+	if !valid {
+		return model.BindResponse{}, errors.New("binding challenge does not belong to this device")
 	}
-	a.st.Generation = s.Device.Generation
-	_ = a.save()
+	var out model.BindResponse
+	if e := a.post(ctx, "bind/poll", map[string]string{"id": id, "poll_token": token}, &out); e != nil {
+		return out, e
+	}
+	if out.ID != id {
+		return out, errors.New("unexpected binding response")
+	}
+	if out.Status == "approved" && out.DeviceID != "" {
+		a.mu.Lock()
+		a.st.DeviceID = out.DeviceID
+		a.st.Pending = nil
+		e := a.save()
+		a.mu.Unlock()
+		if e != nil {
+			return out, e
+		}
+	}
+	return out, nil
+}
+func (a *Agent) Sync(ctx context.Context) (model.ClientSnapshot, error) {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	a.mu.RLock()
+	capabilities := []string{"tcp_socket", "udp_socket", "http_forwarded_headers", "quic_datagram", "tls_mux"}
+	if a.native != nil {
+		capabilities = append(capabilities, a.native.Capabilities()...)
+	}
+	in := model.ClientSyncRequest{DeviceID: a.st.DeviceID, SessionID: a.st.SessionID, Timestamp: time.Now().Unix(), Nonce: protocol.ID(), AppliedRevision: a.snap.Revision, Capabilities: capabilities, Runtime: a.runtimeStatusLocked()}
+	a.mu.RUnlock()
+	if in.DeviceID == "" {
+		return model.ClientSnapshot{}, errors.New("device is not bound")
+	}
+	in.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(a.key, model.ClientSyncPayload(in)))
+	var s model.ClientSnapshot
+	if e := a.post(ctx, "sync", in, &s); e != nil {
+		return s, e
+	}
+	if s.Device.DeviceID != in.DeviceID || s.Device.SessionID != in.SessionID || s.Device.TenantID == "" || s.Device.Generation == 0 || !time.Now().Before(s.ExpiresAt) || !time.Now().Before(s.Device.ExpiresAt) || s.Device.PublicKey != base64.StdEncoding.EncodeToString(a.key.Public().(ed25519.PublicKey)) {
+		return s, errors.New("invalid cloud device snapshot")
+	}
+	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return s, errors.New("agent closed")
+	}
+	if s.Revision < a.snap.Revision {
+		a.mu.Unlock()
+		return s, errors.New("cloud snapshot revision regressed")
+	}
+	a.snap = s
+	a.reconcileLocked()
 	a.mu.Unlock()
 	return s, nil
 }
-func (a *Agent) Snapshot() model.ClientSnapshot { a.mu.RLock(); defer a.mu.RUnlock(); return a.snap }
-func (a *Agent) DialEdge(ctx context.Context, e model.Edge) (*protocol.Carrier, error) {
-	var last error
-	for _, ep := range e.Endpoints {
-		if a.cfg.Transport == "quic_only" && ep.Transport != "quic" {
-			continue
-		}
-		if a.cfg.Transport == "tls_only" && ep.Transport != "tls" {
-			continue
-		}
-		switch ep.Transport {
-		case "quic":
-			tlsConf, er := protocol.TLSClient(a.cfg.CAFile, "", ep.ServerName)
-			if er != nil {
-				last = er
-				continue
-			}
-			q, er := quic.DialAddr(ctx, ep.Address, tlsConf, protocol.QUICConfig())
-			if er != nil {
-				last = er
-				continue
-			}
-			c := protocol.WrapQUIC(q, e.ID)
-			d := a.deviceGrant(e.ID)
-			if er = protocol.AuthenticateClient(ctx, c, d, a.key); er != nil {
-				c.Close()
-				last = er
-				continue
-			}
-			return c, nil
-		case "tls":
-			tlsConf, er := protocol.TLSClient(a.cfg.CAFile, "", ep.ServerName)
-			if er != nil {
-				last = er
-				continue
-			}
-			conn, er := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", ep.Address, tlsConf)
-			if er != nil {
-				last = er
-				continue
-			}
-			c, er := protocol.WrapTLS(conn, false, e.ID)
-			if er != nil {
-				last = er
-				continue
-			}
-			d := a.deviceGrant(e.ID)
-			if er = protocol.AuthenticateClient(ctx, c, d, a.key); er != nil {
-				c.Close()
-				last = er
-				continue
-			}
-			return c, nil
-		}
-	}
-	if last == nil {
-		last = errors.New("no compatible edge endpoint")
-	}
-	return nil, last
-}
-func (a *Agent) deviceGrant(edgeID string) model.DeviceGrant {
+func (a *Agent) Snapshot() model.ClientSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	d := a.snap.Device
-	for _, e := range a.snap.Edges {
-		if e.ID == edgeID {
-			_ = e
-		}
-	}
-	return d
+	// Callers must not mutate the authorization snapshot used by serving flows.
+	b, _ := json.Marshal(a.snap)
+	var s model.ClientSnapshot
+	_ = json.Unmarshal(b, &s)
+	return s
 }
-func (a *Agent) ConnectEdge(ctx context.Context, e model.Edge) error {
-	c, err := a.DialEdge(ctx, e)
-	if err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.carriers[e.ID] = c
-	a.mu.Unlock()
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		defer c.Close()
-		for {
-			st, e := c.Accept(ctx)
-			if e != nil {
-				return
-			}
-			a.wg.Add(1)
-			go func() { defer a.wg.Done(); a.serveStream(st) }()
-		}
-	}()
-	return nil
-}
-func (a *Agent) serveStream(st protocol.Stream) {
-	defer protocol.Abort(st)
-	var f protocol.Flow
-	if e := protocol.ReadJSON(st, &f); e != nil {
-		return
-	}
-	a.mu.RLock()
-	var rr *model.Rule
-	for i := range a.snap.Rules {
-		if a.snap.Rules[i].ID == f.RuleID {
-			rr = &a.snap.Rules[i]
-			break
-		}
-	}
-	a.mu.RUnlock()
-	if rr == nil || rr.Version != f.Version || !rr.Enabled {
-		return
-	}
-	switch f.Protocol {
-	case "tcp":
-		a.serveTCP(st, *rr)
-	case "udp":
-		a.serveUDP(st, *rr)
-	}
-}
-func (a *Agent) serveTCP(st protocol.Stream, r model.Rule) {
-	target, e := net.DialTimeout("tcp", r.Target, 8*time.Second)
-	if e != nil {
-		_ = protocol.WriteJSON(st, protocol.Result{Code: "target_unreachable", Error: e.Error()})
-		return
-	}
-	defer target.Close()
-	_ = protocol.WriteJSON(st, protocol.Result{})
-	err := make(chan error, 2)
-	go func() { _, e := io.Copy(st, target); err <- e }()
-	go func() { _, e := io.Copy(target, st); err <- e }()
-	<-err
-}
-func (a *Agent) serveUDP(st protocol.Stream, r model.Rule) {
+func (a *Agent) watch() {
+	defer a.wg.Done()
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
 	for {
-		b, e := protocol.ReadPacket(st)
-		if e != nil {
+		select {
+		case <-a.ctx.Done():
 			return
-		}
-		conn, e := net.DialTimeout("udp", r.Target, 3*time.Second)
-		if e != nil {
-			return
-		}
-		_, _ = conn.Write(b)
-		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		buf := make([]byte, 64<<10)
-		n, e := conn.Read(buf)
-		conn.Close()
-		if e == nil {
-			_ = protocol.WritePacket(st, buf[:n])
+		case <-t.C:
+			a.mu.Lock()
+			a.reconcileLocked()
+			a.mu.Unlock()
 		}
 	}
 }
-func ParseEndpointAddress(e model.Endpoint) string {
-	if strings.Contains(e.Address, "://") {
-		u, _ := url.Parse(e.Address)
-		return u.Host
+func (a *Agent) reconcileLocked() {
+	valid := time.Now().Before(a.snap.ExpiresAt) && time.Now().Before(a.snap.Device.ExpiresAt)
+	a.pruneEndpointHealthLocked()
+	edges := map[string]model.Edge{}
+	rules := map[string]model.Rule{}
+	for _, e := range a.snap.Edges {
+		edges[e.ID] = e
 	}
-	return e.Address
+	for _, r := range a.snap.Rules {
+		if r.Enabled && !r.Deleting {
+			rules[r.ID] = r
+		}
+	}
+	for k, c := range a.carriers {
+		edge, exists := edges[c.EdgeID]
+		previous, hasPrevious := a.carrierEdges[k]
+		if !valid || !exists || hasPrevious && !sameEdgeAuthority(previous, edge) || c.Device.Generation != a.snap.Device.Generation || c.Device.SessionID != a.snap.Device.SessionID {
+			_ = c.Close()
+			delete(a.carriers, k)
+			delete(a.carrierEdges, k)
+			continue
+		}
+		select {
+		case <-c.Done():
+			delete(a.carriers, k)
+			delete(a.carrierEdges, k)
+		default:
+		}
+	}
+	for _, f := range a.flows {
+		r, ok := rules[f.rule.ID]
+		_, edgeExists := edges[f.edgeID]
+		if !valid || !edgeExists || !ok || r.Version != f.rule.Version || r.EdgeID != f.edgeID || f.generation != a.snap.Device.Generation {
+			f.cancel()
+		}
+	}
+	for k, t := range a.transports {
+		keep := false
+		for _, r := range rules {
+			if valid && k == transportKey(r) {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			t.CloseIdleConnections()
+			delete(a.transports, k)
+		}
+	}
 }

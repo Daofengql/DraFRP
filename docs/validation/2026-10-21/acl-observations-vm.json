@@ -1,0 +1,239 @@
+{
+  "actual_apply_ack_confirmed": true,
+  "carrier": "authenticated TLS/yamux",
+  "database": "real MySQL",
+  "default_deny_hits_persisted": true,
+  "observed_at": "2026-10-20T18:40:20.283940104Z",
+  "old_flow_stopped": true,
+  "status": "passed",
+  "tcp_allowed_before_publish": true,
+  "tcp_denied_after_publish": true,
+  "tcp_observation": {
+    "items": [
+      {
+        "rule_id": "d6edf1205cbcffbd1e72f352d7dcdfd6",
+        "rule_version": 2,
+        "effective_digest": "c4333bb169761538bc432a149bb66349b578412f82f17408b9a5c50f1f2569b1",
+        "protocol": "tcp",
+        "kind": "policy",
+        "policy": {
+          "kind": "rule_template",
+          "template_id": "c5ad5afe978f790d6296dc56660db859",
+          "version": 5,
+          "digest": "4e52fcdc064e48ff0f41c9672106b752676cbc7f9981fcb676760c9913e8833c"
+        },
+        "used_default": true,
+        "reason": "default",
+        "allowed": 0,
+        "denied": 1,
+        "started_at": "2026-10-20T18:40:20.081116312Z",
+        "current": true,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.231834Z"
+      },
+      {
+        "rule_id": "d6edf1205cbcffbd1e72f352d7dcdfd6",
+        "rule_version": 1,
+        "effective_digest": "310c4d4688f17fed7988200fe784f7d4dddf0bbb6e008da0e62b35b83964e568",
+        "protocol": "tcp",
+        "kind": "policy",
+        "policy": {
+          "kind": "rule_template",
+          "template_id": "c5ad5afe978f790d6296dc56660db859",
+          "version": 3,
+          "digest": "bd30847ae005658b6646cb7a79760af899a01fe9be3ff2f125d68bbb08366f6e"
+        },
+        "entry_id": "loopback-entry",
+        "entry_hash": "bdc6e7e9346ae06003b1778d9d7f105ea60f10eb84cbb6488975a305af3cb9f1",
+        "used_default": false,
+        "reason": "loopback-entry",
+        "allowed": 1,
+        "denied": 0,
+        "started_at": "2026-10-20T18:40:19.947908517Z",
+        "current": false,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.035305Z"
+      },
+      {
+        "rule_id": "d6edf1205cbcffbd1e72f352d7dcdfd6",
+        "rule_version": 2,
+        "effective_digest": "c4333bb169761538bc432a149bb66349b578412f82f17408b9a5c50f1f2569b1",
+        "protocol": "tcp",
+        "kind": "rule_total",
+        "policy": {
+          "kind": "",
+          "version": 0,
+          "digest": ""
+        },
+        "used_default": false,
+        "reason": "policy_denied",
+        "allowed": 0,
+        "denied": 1,
+        "started_at": "2026-10-20T18:40:20.081133604Z",
+        "current": true,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.231834Z"
+      },
+      {
+        "rule_id": "d6edf1205cbcffbd1e72f352d7dcdfd6",
+        "rule_version": 1,
+        "effective_digest": "310c4d4688f17fed7988200fe784f7d4dddf0bbb6e008da0e62b35b83964e568",
+        "protocol": "tcp",
+        "kind": "rule_total",
+        "policy": {
+          "kind": "",
+          "version": 0,
+          "digest": ""
+        },
+        "used_default": false,
+        "reason": "all_policies_allow",
+        "allowed": 1,
+        "denied": 0,
+        "started_at": "2026-10-20T18:40:19.947916522Z",
+        "current": false,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.035305Z"
+      }
+    ],
+    "application": {
+      "state": "applied",
+      "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+      "ack_boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+      "ack": {
+        "rule_id": "d6edf1205cbcffbd1e72f352d7dcdfd6",
+        "rule_version": 2,
+        "effective_digest": "c4333bb169761538bc432a149bb66349b578412f82f17408b9a5c50f1f2569b1",
+        "policies": [
+          {
+            "kind": "rule_template",
+            "template_id": "c5ad5afe978f790d6296dc56660db859",
+            "version": 5,
+            "digest": "4e52fcdc064e48ff0f41c9672106b752676cbc7f9981fcb676760c9913e8833c"
+          }
+        ],
+        "state": "applied",
+        "snapshot_revision": 10,
+        "applied_at": "2026-10-20T18:40:20.075242281Z",
+        "expires_at": "2026-10-20T18:41:20.072406Z",
+        "active_flows": 0,
+        "sampled_at": "2026-10-20T18:40:20.231834412Z"
+      }
+    }
+  },
+  "test": "TestACLObservationFullSystem",
+  "udp_allowed_packets": 3,
+  "udp_denied_after_publish": true,
+  "udp_observation": {
+    "items": [
+      {
+        "rule_id": "d090c303259d05f47a69c83b58335158",
+        "rule_version": 2,
+        "effective_digest": "c575c3177bbbf059c1f7aa6f60d18ca6b4858aa33bdc1b7b44f7a148955359b6",
+        "protocol": "udp",
+        "kind": "rule_total",
+        "policy": {
+          "kind": "",
+          "version": 0,
+          "digest": ""
+        },
+        "used_default": false,
+        "reason": "policy_denied",
+        "allowed": 0,
+        "denied": 1,
+        "started_at": "2026-10-20T18:40:20.081243852Z",
+        "current": true,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.231834Z"
+      },
+      {
+        "rule_id": "d090c303259d05f47a69c83b58335158",
+        "rule_version": 1,
+        "effective_digest": "6f4ee3c5930cef661f2188bf28ed7f7f103e36db137fa6372dd07daab6f8fdea",
+        "protocol": "udp",
+        "kind": "policy",
+        "policy": {
+          "kind": "rule_template",
+          "template_id": "c5ad5afe978f790d6296dc56660db859",
+          "version": 3,
+          "digest": "bd30847ae005658b6646cb7a79760af899a01fe9be3ff2f125d68bbb08366f6e"
+        },
+        "entry_id": "loopback-entry",
+        "entry_hash": "bdc6e7e9346ae06003b1778d9d7f105ea60f10eb84cbb6488975a305af3cb9f1",
+        "used_default": false,
+        "reason": "loopback-entry",
+        "allowed": 3,
+        "denied": 0,
+        "started_at": "2026-10-20T18:40:19.948896298Z",
+        "current": false,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.035305Z"
+      },
+      {
+        "rule_id": "d090c303259d05f47a69c83b58335158",
+        "rule_version": 1,
+        "effective_digest": "6f4ee3c5930cef661f2188bf28ed7f7f103e36db137fa6372dd07daab6f8fdea",
+        "protocol": "udp",
+        "kind": "rule_total",
+        "policy": {
+          "kind": "",
+          "version": 0,
+          "digest": ""
+        },
+        "used_default": false,
+        "reason": "all_policies_allow",
+        "allowed": 3,
+        "denied": 0,
+        "started_at": "2026-10-20T18:40:19.948897641Z",
+        "current": false,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.035305Z"
+      },
+      {
+        "rule_id": "d090c303259d05f47a69c83b58335158",
+        "rule_version": 2,
+        "effective_digest": "c575c3177bbbf059c1f7aa6f60d18ca6b4858aa33bdc1b7b44f7a148955359b6",
+        "protocol": "udp",
+        "kind": "policy",
+        "policy": {
+          "kind": "rule_template",
+          "template_id": "c5ad5afe978f790d6296dc56660db859",
+          "version": 5,
+          "digest": "4e52fcdc064e48ff0f41c9672106b752676cbc7f9981fcb676760c9913e8833c"
+        },
+        "used_default": true,
+        "reason": "default",
+        "allowed": 0,
+        "denied": 1,
+        "started_at": "2026-10-20T18:40:20.081243031Z",
+        "current": true,
+        "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+        "observed_at": "2026-10-20T18:40:20.231834Z"
+      }
+    ],
+    "application": {
+      "state": "applied",
+      "boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+      "ack_boot_id": "35b37b6a7ed10c25740bed6157c09cd7",
+      "ack": {
+        "rule_id": "d090c303259d05f47a69c83b58335158",
+        "rule_version": 2,
+        "effective_digest": "c575c3177bbbf059c1f7aa6f60d18ca6b4858aa33bdc1b7b44f7a148955359b6",
+        "policies": [
+          {
+            "kind": "rule_template",
+            "template_id": "c5ad5afe978f790d6296dc56660db859",
+            "version": 5,
+            "digest": "4e52fcdc064e48ff0f41c9672106b752676cbc7f9981fcb676760c9913e8833c"
+          }
+        ],
+        "state": "applied",
+        "snapshot_revision": 10,
+        "applied_at": "2026-10-20T18:40:20.0752415Z",
+        "expires_at": "2026-10-20T18:41:20.072406Z",
+        "active_flows": 0,
+        "sampled_at": "2026-10-20T18:40:20.231834412Z"
+      }
+    }
+  },
+  "unacknowledged_publish_pending": true
+}

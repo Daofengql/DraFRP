@@ -1,0 +1,142 @@
+{
+  "status": "passed",
+  "scope": "dedicated Hyper-V Ubuntu VM only",
+  "source": "<redacted test workspace>/validation-20261021/source",
+  "expected_build_id": "0.1.0-preview+3d76fc7",
+  "started_at": "2026-10-20T17:54:33Z",
+  "source_digest_before": {
+    "sha256": "0b698ee2e068cadf477d7b7584c22bab1dc17bfed3b53e9a6063a0d0ec84c1fb",
+    "files": 128
+  },
+  "targets": {
+    "cloud": {
+      "image": "drafrp-qa-cloud:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 53.868,
+      "image_id": "sha256:45df07b865b49de21d596470437d56e5c5a56edfc206944da0a948223565ff58",
+      "configured_user": "drafrp",
+      "entrypoint": [
+        "drafrp-cloud"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 10001,
+      "version_output": "2026/10/20 17:55:28 DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "status": "passed"
+    },
+    "edge": {
+      "image": "drafrp-qa-edge:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 1.542,
+      "image_id": "sha256:f897a326bc18a926b1560c7a8a44436aa662161a801930e423143a125303efc6",
+      "configured_user": "drafrp",
+      "entrypoint": [
+        "drafrp-edge"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 10001,
+      "version_output": "DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "status": "passed"
+    },
+    "client": {
+      "image": "drafrp-qa-client:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 1.347,
+      "image_id": "sha256:039435ca13643aff7f81a02d59e4398d85468b77f4b7d50939943973a0d5399e",
+      "configured_user": "drafrp",
+      "entrypoint": [
+        "drafrp-client"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 10001,
+      "version_output": "2026/10/20 17:55:33 DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "status": "passed"
+    },
+    "edge-wire": {
+      "image": "drafrp-qa-edge-wire:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 3.059,
+      "image_id": "sha256:8727ea82df28006ebe7795403ddcd6bbef23b46d12059ef6d960cd363307e31f",
+      "configured_user": "root",
+      "entrypoint": [
+        "drafrp-edge"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 0,
+      "version_output": "DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "tools": {
+        "ip": true,
+        "tc": true,
+        "iptables": false
+      },
+      "tool_versions": {
+        "ip": "ip utility, iproute2-6.15.0",
+        "tc": "tc utility, iproute2-6.15.0"
+      },
+      "status": "passed"
+    },
+    "client-native": {
+      "image": "drafrp-qa-client-native:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 2.905,
+      "image_id": "sha256:6bb37d3b048c47ca61d64430fc8c51a64a2055922190ecb3f0fbecea3bf50615",
+      "configured_user": "root",
+      "entrypoint": [
+        "drafrp-client"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 0,
+      "version_output": "2026/10/20 17:55:42 DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "tools": {
+        "ip": true,
+        "tc": true,
+        "iptables": true
+      },
+      "tool_versions": {
+        "ip": "ip utility, iproute2-6.15.0",
+        "tc": "tc utility, iproute2-6.15.0",
+        "iptables": "iptables v1.8.11 (nf_tables)"
+      },
+      "status": "passed"
+    }
+  },
+  "cloud_runtime": {
+    "container": "drafrp-docker-qa-eba352e7165b",
+    "container_id": "e211958423370b14181c409d772d2334abfc98ba1db4096ddd6400158441ecef",
+    "status": "passed",
+    "ready_status": 204,
+    "console_status": 200,
+    "console_index_sha256": "bd7a1e8840d4a869560ae0bcf350b98d8b1371b58e897a1e500c1f41b6df810e",
+    "console_entry_assets": [
+      {
+        "path": "/console/assets/index-PliKaPEA.js",
+        "bytes": 22037,
+        "sha256": "308e02f6c2945064a7277524aef0eeae00fae3083151666ffa49141fc4644909"
+      }
+    ],
+    "spa_deep_route": true,
+    "backend_build_id": "0.1.0-preview+3d76fc7",
+    "embedded_build_id_matches": true,
+    "fixture_captcha_explicitly_disabled": true,
+    "running_nonroot_readonly_no_capabilities": true,
+    "owned_container_removed": true,
+    "credentials_removed": true,
+    "owned_database_dropped": true
+  },
+  "source_digest_after": {
+    "sha256": "0b698ee2e068cadf477d7b7584c22bab1dc17bfed3b53e9a6063a0d0ec84c1fb",
+    "files": 128
+  },
+  "completed_at": "2026-10-20T17:55:47Z",
+  "source_archive": {
+    "path": "<redacted test workspace>/validation-20261021/source.tgz",
+    "sha256": "ac603ec8d1c49af9cba543862bbb14fc057f8fda57740de6ee2754df80007565",
+    "files": 159
+  },
+  "docker_backend_base": "golang:1.26.10-alpine",
+  "go_mod_toolchain": "go1.26.10",
+  "cleanup_verified": {
+    "owned_cloud_containers": 0,
+    "owned_qa_databases": 0,
+    "private_config_removed": true
+  }
+}

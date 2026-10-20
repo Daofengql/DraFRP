@@ -1,0 +1,10 @@
+{
+  "cloud_url": "https://control.example.com",
+  "state_dir": "/var/lib/drafrp-client",
+  "name": "my-device",
+  "sync_interval": "20s",
+  "transport": "auto",
+  "network_mode": "socket",
+  "allowed_target_cidrs": ["127.0.0.0/8", "::1/128"],
+  "max_carriers_per_edge": 2
+}

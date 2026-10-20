@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 type Config struct {
@@ -43,6 +44,7 @@ type Store struct {
 	generation string
 	serial     uint64
 	cancel     context.CancelFunc
+	loads      singleflight.Group
 }
 
 func New(ctx context.Context, cfg Config) *Store {
@@ -93,6 +95,36 @@ func (s *Store) Invalidate() {
 	s.stats.Bytes = 0
 }
 func (s *Store) Generation() string { s.mu.Lock(); defer s.mu.Unlock(); return s.generation }
+
+// GetOrLoad coalesces rebuilds within the current disposable cache generation.
+// Callers must use it only for reconstructible views, never authorization or
+// accounting. A failed cache write still returns the authoritative load.
+func (s *Store) GetOrLoad(ctx context.Context, key string, ttl time.Duration, load func(context.Context) ([]byte, error)) ([]byte, error) {
+	if v, ok := s.Get(ctx, key); ok {
+		return v, nil
+	}
+	g := s.Generation()
+	result := s.loads.DoChan(g+"/"+key, func() (any, error) {
+		if v, ok := s.Get(ctx, key); ok {
+			return v, nil
+		}
+		v, e := load(ctx)
+		if e != nil {
+			return nil, e
+		}
+		_ = s.Put(ctx, g, key, v, ttl)
+		return v, nil
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-result:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return append([]byte(nil), r.Val.([]byte)...), nil
+	}
+}
 func (s *Store) fail(g string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -105,6 +137,9 @@ func (s *Store) fail(g string) {
 	}
 }
 func (s *Store) Get(ctx context.Context, key string) ([]byte, bool) {
+	if len(key) > 512 || ctx.Err() != nil {
+		return nil, false
+	}
 	s.mu.Lock()
 	g, backend := s.generation, s.stats.Backend
 	if backend == "memory" {
@@ -125,8 +160,10 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, bool) {
 	s.mu.Unlock()
 	c, cancel := context.WithTimeout(ctx, 350*time.Millisecond)
 	defer cancel()
-	v, err := s.redis.Get(c, "drafrp:"+g+":"+key).Bytes()
-	if err != nil && !errors.Is(err, redis.Nil) {
+	// Check stored length atomically before returning data. Redis is optional
+	// external storage; an oversized value must not become an unbounded reply.
+	v, err := s.redis.Eval(c, `local n=redis.call('STRLEN',KEYS[1]); if n>tonumber(ARGV[1]) then return redis.error_reply('cache value exceeds bound') end; return redis.call('GET',KEYS[1])`, []string{"drafrp:" + g + ":" + key}, min(1<<20, s.cfg.MaxBytes)).Text()
+	if err != nil && !errors.Is(err, redis.Nil) && ctx.Err() == nil {
 		s.fail(g)
 	}
 	s.mu.Lock()
@@ -137,7 +174,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, bool) {
 	}
 	if err == nil {
 		s.stats.Hits++
-		return v, true
+		return []byte(v), true
 	}
 	s.stats.Misses++
 	return nil, false
@@ -145,7 +182,7 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, bool) {
 
 // Put writes only if generation still matches the one captured before loading.
 func (s *Store) Put(ctx context.Context, g, key string, v []byte, ttl time.Duration) bool {
-	if ttl <= 0 || ttl > time.Hour || len(v) > 1<<20 || len(v) > s.cfg.MaxBytes {
+	if ttl <= 0 || ttl > time.Hour || len(v) > 1<<20 || len(v) > s.cfg.MaxBytes || len(key) > 512 || ctx.Err() != nil {
 		return false
 	}
 	s.mu.Lock()
@@ -187,10 +224,14 @@ func (s *Store) Put(ctx context.Context, g, key string, v []byte, ttl time.Durat
 	c, cancel := context.WithTimeout(ctx, 350*time.Millisecond)
 	defer cancel()
 	if err := s.redis.Set(c, "drafrp:"+g+":"+key, v, ttl).Err(); err != nil {
-		s.fail(g)
+		if ctx.Err() == nil {
+			s.fail(g)
+		}
 		return false
 	}
-	return true
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation == g && s.stats.Backend == "redis"
 }
 func (s *Store) prune(now time.Time) {
 	for k, v := range s.items {

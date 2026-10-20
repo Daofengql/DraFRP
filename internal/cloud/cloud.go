@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -15,32 +16,35 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"drafrp/internal/cache"
-	"drafrp/internal/model"
 	"drafrp/internal/protocol"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type Config struct {
-	Listen        string        `json:"listen"`
-	MySQLDSN      string        `json:"mysql_dsn"`
-	Redis         cache.Config  `json:"redis"`
-	AdminUsername string        `json:"admin_username"`
-	AdminPassword string        `json:"admin_password"`
-	StorageKey    string        `json:"storage_key"`
-	BuildID       string        `json:"build_id"`
-	SessionTTL    time.Duration `json:"session_ttl"`
-	BindTTL       time.Duration `json:"bind_ttl"`
-	SnapshotTTL   time.Duration `json:"snapshot_ttl"`
+	Listen               string        `json:"listen"`
+	MySQLDSN             string        `json:"mysql_dsn"`
+	Redis                cache.Config  `json:"redis"`
+	AdminUsername        string        `json:"admin_username"`
+	AdminPassword        string        `json:"admin_password"`
+	StorageKey           string        `json:"storage_key"`
+	BuildID              string        `json:"build_id"`
+	SessionTTL           time.Duration `json:"session_ttl"`
+	BindTTL              time.Duration `json:"bind_ttl"`
+	SnapshotTTL          time.Duration `json:"snapshot_ttl"`
+	TLSCert              string        `json:"tls_cert"`
+	TLSKey               string        `json:"tls_key"`
+	SecureCookies        bool          `json:"secure_cookies"`
+	RegistrationDisabled bool          `json:"registration_disabled"`
+	CaptchaDisabled      bool          `json:"captcha_disabled"`
 }
 
 func (c *Config) defaults() {
@@ -74,13 +78,19 @@ func (c *Config) defaults() {
 }
 
 type Server struct {
-	cfg     Config
-	db      *sql.DB
-	tmp     *cache.Store
-	started time.Time
-	key     []byte
-	mu      sync.Mutex
-	events  map[chan struct{}]struct{}
+	cfg            Config
+	db             *sql.DB
+	tmp            *cache.Store
+	started        time.Time
+	key            []byte
+	mu             sync.Mutex
+	subscribers    map[chan struct{}]struct{}
+	loginAttempts  map[string]loginAttempt
+	lookupTXT      func(context.Context, string) ([]string, error)
+	cancel         context.CancelFunc
+	captchaMu      sync.Mutex
+	captchas       map[string]captchaEntry
+	captchaEntropy io.Reader
 }
 
 func New(ctx context.Context, c Config) (*Server, error) {
@@ -88,7 +98,16 @@ func New(ctx context.Context, c Config) (*Server, error) {
 	if c.MySQLDSN == "" {
 		return nil, errors.New("mysql_dsn is required")
 	}
-	db, e := sql.Open("mysql", c.MySQLDSN)
+	dsn, e := mysql.ParseDSN(c.MySQLDSN)
+	if e != nil {
+		return nil, e
+	}
+	dsn.ParseTime = true
+	dsn.Loc = time.UTC
+	dsn.Timeout = 8 * time.Second
+	dsn.ReadTimeout = 15 * time.Second
+	dsn.WriteTimeout = 15 * time.Second
+	db, e := sql.Open("mysql", dsn.FormatDSN())
 	if e != nil {
 		return nil, e
 	}
@@ -107,14 +126,18 @@ func New(ctx context.Context, c Config) (*Server, error) {
 	}
 	key, e := decodeKey(c.StorageKey)
 	if e != nil {
+		db.Close()
 		return nil, e
 	}
-	s := &Server{cfg: c, db: db, tmp: cache.New(ctx, c.Redis), started: time.Now().UTC(), key: key, events: map[chan struct{}]struct{}{}}
+	runtimeCtx, runtimeCancel := context.WithCancel(ctx)
+	s := &Server{cfg: c, db: db, tmp: cache.New(runtimeCtx, c.Redis), started: time.Now().UTC(), key: key, subscribers: map[chan struct{}]struct{}{}, lookupTXT: net.DefaultResolver.LookupTXT, cancel: runtimeCancel}
 	if c.AdminUsername != "" && c.AdminPassword != "" {
 		if e = s.bootstrap(ctx); e != nil {
+			s.Close()
 			return nil, e
 		}
 	}
+	go s.maintain(runtimeCtx)
 	return s, nil
 }
 func decodeKey(v string) ([]byte, error) {
@@ -131,6 +154,9 @@ func decodeKey(v string) ([]byte, error) {
 	return b, nil
 }
 func (s *Server) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.tmp != nil {
 		s.tmp.Close()
 	}
@@ -140,10 +166,25 @@ func (s *Server) Close() {
 }
 func (s *Server) DB() *sql.DB           { return s.db }
 func (s *Server) Handler() http.Handler { return s.routes() }
-func (s *Server) notify() {
+func (s *Server) notify(ctx context.Context) {
+	_, e := s.store(ctx).ExecContext(ctx, "UPDATE config_revision SET revision=revision+1 WHERE id=1")
+	if m, ok := ctx.Value(mutationKey{}).(*mutation); ok {
+		if e != nil {
+			m.err = e
+			return
+		}
+		m.changed = true
+		return
+	}
+	s.broadcast()
+}
+func (s *Server) broadcast() {
+	if s.tmp != nil {
+		s.tmp.Invalidate()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for c := range s.events {
+	for c := range s.subscribers {
 		select {
 		case c <- struct{}{}:
 		default:
@@ -151,7 +192,7 @@ func (s *Server) notify() {
 	}
 }
 func id() string                { return protocol.ID() }
-func now() time.Time            { return time.Now().UTC() }
+func now() time.Time            { return time.Now().UTC().Truncate(time.Microsecond) }
 func hashToken(v string) string { b := sha256.Sum256([]byte(v)); return hex.EncodeToString(b[:]) }
 func randomToken(n int) string {
 	b := make([]byte, n)
@@ -166,6 +207,9 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	if e := d.Decode(v); e != nil {
 		return e
 	}
+	if e := d.Decode(new(any)); e != io.EOF {
+		return errors.New("exactly one JSON value is required")
+	}
 	return nil
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -173,12 +217,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-func apiErr(w http.ResponseWriter, status, code, msg string) {
+func apiErr(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
 }
 func (s *Server) bootstrap(ctx context.Context) error {
+	if len(s.cfg.AdminPassword) < 10 || len(s.cfg.AdminPassword) > 72 {
+		return errors.New("admin password must be 10..72 bytes")
+	}
+	tx, e := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var revision uint64
+	if e = tx.QueryRowContext(ctx, "SELECT revision FROM config_revision WHERE id=1 FOR UPDATE").Scan(&revision); e != nil {
+		return e
+	}
 	var n int
-	if e := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n); e != nil {
+	if e := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n); e != nil {
 		return e
 	}
 	if n > 0 {
@@ -189,21 +245,42 @@ func (s *Server) bootstrap(ctx context.Context) error {
 		return e
 	}
 	uid, tid := id(), id()
-	_, e = s.db.ExecContext(ctx, "INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)", tid, s.cfg.AdminUsername, now())
+	_, e = tx.ExecContext(ctx, "INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)", tid, s.cfg.AdminUsername, now())
 	if e != nil {
 		return e
 	}
-	_, e = s.db.ExecContext(ctx, "INSERT INTO users(id,tenant_id,username,password_hash,role,disabled,created_at) VALUES(?,?,?,?,?,0,?)", uid, tid, s.cfg.AdminUsername, string(pw), "admin", now())
-	if e == nil {
-		_ = s.audit(ctx, uid, tid, "bootstrap", "user", uid)
+	_, e = tx.ExecContext(ctx, "INSERT INTO users(id,tenant_id,username,password_hash,role,disabled,created_at) VALUES(?,?,?,?,?,0,?)", uid, tid, s.cfg.AdminUsername, string(pw), "admin", now())
+	if e != nil {
+		return e
 	}
-	return e
+	if _, e = tx.ExecContext(ctx, "INSERT INTO quotas(tenant_id,updated_at) VALUES(?,?)", tid, now()); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO audit(id,actor_id,tenant_id,action,resource_id,created_at) VALUES(?,?,?,?,?,?)", id(), uid, tid, "bootstrap", uid, now()); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+func (s *Server) csrf(sid string) string {
+	h := hmac.New(sha256.New, s.key)
+	_, _ = h.Write([]byte("drafrp-csrf-v1\n" + sid))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 func (s *Server) audit(ctx context.Context, actor, tenant, action, resource string, rid any) {
-	_, _ = s.db.ExecContext(ctx, "INSERT INTO audit(id,actor_id,tenant_id,action,resource_id,created_at) VALUES(?,?,?,?,?,?)", id(), actor, tenant, action, fmt.Sprint(rid), now())
+	_, e := s.store(ctx).ExecContext(ctx, "INSERT INTO audit(id,actor_id,tenant_id,action,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)", id(), actor, tenant, action, resource, fmt.Sprint(rid), now())
+	if m, ok := ctx.Value(mutationKey{}).(*mutation); ok {
+		m.audited = true
+		if e != nil {
+			m.err = e
+		}
+	}
 }
 func encrypt(key []byte, plain string) (string, error) {
-	b, _ := aes.NewCipher(key)
+	b, e := aes.NewCipher(key)
+	if e != nil {
+		return "", e
+	}
 	g, e := cipher.NewGCM(b)
 	if e != nil {
 		return "", e
@@ -257,7 +334,3 @@ func verifyPub(s string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(b), nil
 }
 func parseTime(v string) time.Time { t, _ := time.Parse(time.RFC3339, v); return t }
-
-var _ = log.Printf
-var _ = io.EOF
-var _ = strconv.Itoa

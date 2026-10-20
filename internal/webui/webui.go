@@ -1,50 +1,61 @@
 package webui
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 )
 
-// Handler serves the cloud-only console at /console/. API, auth, health and
-// unknown service paths are intentionally left to the caller's mux.
+// Handler serves only the cloud console. API, authentication and probes remain
+// owned by the caller's mux. Development builds intentionally do not require dist.
 func Handler() http.Handler { return &handler{assets: staticFS()} }
 
 type handler struct{ assets fs.FS }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
-	if p == "/console" {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			http.Redirect(w, r, "/console/", http.StatusMovedPermanently)
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-		}
-		return
-	}
-	if !strings.HasPrefix(p, "/console/") {
+	if p != "/console" && !strings.HasPrefix(p, "/console/") {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if p == "/console" {
+		http.Redirect(w, r, "/console/", http.StatusMovedPermanently)
 		return
 	}
 	rel := strings.TrimPrefix(p, "/console/")
-	if rel == "" {
-		rel = "index.html"
+	// Reject traversal rather than canonicalizing it into another embedded file.
+	if strings.Contains(rel, "\\") || strings.Contains(rel, "\x00") {
+		http.NotFound(w, r)
+		return
 	}
-	rel = path.Clean("/" + rel)[1:]
-	if rel == "" || rel == "." {
+	for _, segment := range strings.Split(rel, "/") {
+		if segment == "." || segment == ".." {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if rel == "" {
 		rel = "index.html"
 	}
 	data, err := fs.ReadFile(h.assets, rel)
 	isIndex := rel == "index.html"
 	if err != nil {
-		// Only extensionless navigation URLs may fall back to the SPA entry.
-		if strings.Contains(path.Base(rel), ".") || strings.HasPrefix(rel, "assets/") {
+		// Missing files and non-navigation requests must receive a real 404. A dot
+		// may legitimately occur in a binding code; only the last path component
+		// with a file extension is excluded from SPA fallback.
+		accept := r.Header.Get("Accept")
+		if path.Ext(rel) != "" || rel == "assets" || strings.HasPrefix(rel, "assets/") || (accept != "" && !strings.Contains(accept, "text/html") && !strings.Contains(accept, "*/*")) {
 			http.NotFound(w, r)
 			return
 		}
@@ -57,30 +68,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if isIndex {
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		// Only Vite's content-hashed asset namespace is immutable. Build metadata
+		// and public files can change between releases under a stable filename.
+		if strings.HasPrefix(rel, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if ct := mime.TypeByExtension(path.Ext(rel)); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
 	}
-	if ct := mime.TypeByExtension(path.Ext(rel)); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
-	w.Header().Set("Content-Length", stringSize(len(data)))
-	if r.Method == http.MethodHead {
-		return
-	}
-	_, _ = w.Write(data)
-}
-
-func stringSize(n int) string {
-	// Avoid strconv in this tiny handler's hot path while retaining valid header syntax.
-	if n == 0 {
-		return "0"
-	}
-	var b [24]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("ETag", fmt.Sprintf(`"%x"`, sha256.Sum256(data)))
+	// ServeContent correctly handles HEAD, byte ranges and conditional requests.
+	// No on-the-fly compression is applied, so there is no representation mismatch.
+	http.ServeContent(w, r, rel, time.Time{}, bytes.NewReader(data))
 }

@@ -1,0 +1,55 @@
+{
+  "status": "passed",
+  "branch": "codex/preview-implementation",
+  "source_base_commit": "3d76fc72649ce4f4b39a258c8c41e0c16f337fea",
+  "windows": {
+    "go": "go1.26.10",
+    "vet": "passed",
+    "race_all_packages": "passed",
+    "race_all_packages_seconds": 304.730,
+    "mysql": "dedicated MySQL 8.4",
+    "redis": "dedicated Redis 7.4"
+  },
+  "hyperv_linux": {
+    "go": "go1.26.10",
+    "vet": "passed",
+    "race_all_packages": "passed",
+    "race_all_packages_seconds": null,
+    "mysql": "dedicated MySQL 8.4",
+    "redis": "dedicated Redis 7.4"
+  },
+  "frontend": {
+    "typecheck": "passed",
+    "tests": 11,
+    "format": "passed",
+    "production_build": "passed"
+  },
+  "browser": {
+    "real_cloud_upgrade": "passed",
+    "admin_quota_table_and_editor": "passed",
+    "user_domain_limit_zero_error": "passed",
+    "real_quic_and_tls_quality_persisted": "passed",
+    "real_acl_hit_counts_and_application_ack": "passed",
+    "mobile_quality_cards_document_width": 390,
+    "mobile_acl_dialog_document_width": 390,
+    "screenshots": [
+      "output/playwright/observations-live-desktop.png",
+      "output/playwright/observations-live-mobile.png",
+      "output/playwright/acl-observations-live-desktop.png",
+      "output/playwright/acl-observations-live-mobile.png",
+      "output/playwright/acl-applications-live.png",
+      "output/playwright/resource-quota-denied.png"
+    ]
+  },
+  "published_packages": {
+    "windows": "bin/0.1.0-preview/windows-amd64",
+    "linux": "bin/0.1.0-preview/linux-amd64",
+    "all_three_roles_built": true,
+    "embedded_console_build": true
+  },
+  "scheduler_regression": {
+    "command": "go test -race ./internal/edge -run TestRootSchedulerDoesNotBlockOtherAccountsBehindLargeChunk -count=100",
+    "passed": true
+  },
+  "scope_note": "The complete design still has the documented TUN/raw-IP, Windows/IPv6 native, multi-space, ACME and long-duration/public benchmark boundaries in IMPLEMENTATION.md."
+}

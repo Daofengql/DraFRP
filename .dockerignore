@@ -1,0 +1,16 @@
+.git
+bin
+.runtime
+web/node_modules
+web/dist
+internal/webui/dist
+*.test
+*.exe
+coverage.out
+.native-test-*
+.client-test-linux
+web/output
+web/.playwright-cli
+.playwright-cli
+output
+web/tsconfig.tsbuildinfo

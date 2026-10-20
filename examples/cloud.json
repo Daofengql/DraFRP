@@ -1,0 +1,13 @@
+{
+  "listen": "127.0.0.1:8080",
+  "mysql_dsn": "drafrp:REPLACE_PASSWORD@tcp(127.0.0.1:3306)/drafrp?charset=utf8mb4",
+  "storage_key": "REPLACE_WITH_BASE64_32_RANDOM_BYTES",
+  "admin_username": "admin",
+  "admin_password": "REPLACE_WITH_A_LONG_RANDOM_PASSWORD",
+  "registration_disabled": false,
+  "captcha_disabled": false,
+  "session_ttl": "24h",
+  "bind_ttl": "10m",
+  "snapshot_ttl": "3m",
+  "redis": { "address": "", "max_entries": 4096, "max_bytes": 16777216 }
+}

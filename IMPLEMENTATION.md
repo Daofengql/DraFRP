@@ -1,19 +1,61 @@
-# DraFRP implementation and validation record
+# DraFRP 实现与验收记录
 
-Status: active implementation. Design documents describe intended behavior; they are not evidence of completed features.
+截至 2026-10-21，本仓库已从设计骨架形成可构建、可运行的三角色预览实现。七份设计文档保留完整目标；本文件区分已验证路径、实现边界和后续工作。所有真实网络测试均使用专用 Hyper-V Ubuntu 虚拟机或其隔离容器，没有改动宿主路由、防火墙或其他项目服务。
 
-## Work areas
+## 已实现范围
 
-| Area | Owner | Evidence / status |
+| 领域 | 当前行为 | 验证依据 |
 | --- | --- | --- |
-| Shared contracts, integration, environment, release validation | root | Go model and API contract created; tests pending |
-| Cloud API, MySQL, optional Redis/memory, business authorization | cloud agent | In progress |
-| Edge/client, independent transport, TCP/UDP/HTTP forwarding | transport agent | In progress |
-| React/TypeScript/MUI console and embed integration | frontend agent | In progress |
-| Linux TUN native source identity | root | Not implemented or verified; strict rules must fail closed |
+| 三个独立二进制 | cloud、edge、client；仅 cloud 携带前端和数据库依赖 | Windows/Linux 交叉构建、依赖隔离检查、真实三进程联调 |
+| 注册与登录 | 默认公开注册和图形验证码；普通用户、独立空间；cookie/CSRF、会话撤销、来源限流 | 真实 MySQL race 测试、真实浏览器注册→登录→绑定→重启恢复 |
+| 验证码 | 本地 PNG、六位、两分钟、一次尝试、HMAC 摘要、有界容量；登录与注册共用校验 | 错误/过期/复用拒绝，32 并发仅一次成功，容量/限流测试 |
+| 设备身份 | 本地 Ed25519、公钥指纹、短期绑定确认、签名同步、nonce、session/generation/租约 | 重放、并发身份、撤销、私钥持久化和浏览器指纹核对 |
+| 云控持久化 | MySQL 为事实源；写操作事务、审计、版本与幂等响应；证书私钥 AES-GCM | 真实 MySQL 的隔离、重启、并发、回滚和旧资源释放测试 |
+| 临时缓存 | 可选 Redis、内存降级、容量限制、恢复探测、generation fence；只缓存非权威读 | Redis 集成测试、缓存并发测试；运行授权始终走数据库 |
+| TCP/UDP | 独立入口、端口池与唯一资源占用、半关闭、零长度/大 UDP、按流撤销 | QUIC/TLS 全栈与三正式二进制验收 |
+| HTTP(S) | 域名 TXT 验证、证书上传、边缘路由/TLS 终止、Agent 回源、流式/WebSocket | 来源头伪造隔离、并发请求、HTTPS 与撤销测试 |
+| 承载 | ALPN/版本/挑战签名；QUIC stream/DATAGRAM；TLS/yamux；有界多承载、严格模式、自动回退 | 真正 UDP 黑洞→TLS 回退、QUIC 恢复、TLS 原流存活；协议授权/帧边界测试 |
+| TCP/UDP ACL | 显式 default action、CIDR/源端口/协议/时间/地域、草稿发布、mandatory、收紧关闭已有流 | ACL 单测、运行时重判与撤销测试；无预置实际策略 |
+| ACL 模拟 | 未保存草稿、草稿/已发布模板及规则有效链；逐层版本、命中条目、默认动作、显式地域假设 | 真实 MySQL race：跨空间/角色、快照隔离、mandatory 交集、CSRF/Origin、诊断无写入 |
+| ACL 实际观测 | TCP 入口连接/UDP 入站报文逐条命中、默认动作、允许/拒绝；真实应用 ACK 与跨边缘模板反馈 | 真实 MySQL 幂等/租户/boot/容量测试；Windows/Hyper-V 真实发布、旧流关闭与 pending→ACK |
+| 设备传输观测 | Agent 签名采样承载、流、握手和端点重试；持续控制 RTT 有界窗口、QUIC 原生 ACK 统计；设备页轮询 | TLS/QUIC 实际采样、旧签名兼容、真实 MySQL 隔离/过期/撤销、短租约续期与 race |
+| 地域数据 | 管理员 JSON 前缀库、IPv4/IPv6 最长匹配、显式未知来源动作、缺失/损坏关闭依赖规则 | 加载/边界/损坏/热更新测试；控制台显示实际状态 |
+| 共享账户资源 | 账号速率、突发、并发、新流速率、周期额度；跨边缘持久预算与幂等用量结算 | 两独立边缘与两 Agent 测试：并发 2 分为 1+1，96MiB 分为 64+32，无重复充值 |
+| 配置资源限额 | 设备、规则/站点、公网 TCP/UDP 端口和域名数量；事务锁内检查；保留旧端口归属 | 真实 MySQL race：跨边缘并发、旧客户端兼容、迁移回填、绑定重试与释放生命周期 |
+| 边缘容量 | payload 层总额与账号公平调度；可选 Linux 专用接口 TBF 出站整形 | 两 TCP 流的 8Mbps 实测约 7.97Mbps；qdisc 丢失后约 1.13s 关闭数据面 |
+| Linux native | IPv4 TCP/UDP IP_TRANSPARENT；目标 socket 看到真实访客 IP 与端口；精确回程和所有权清理 | 隔离命名空间、TLS/QUIC × TCP/UDP 四条正式二进制路径，见 native-fullstack.json |
+| 端口资源查询 | 业务池与承载/HTTP 系统保留、TCP/UDP、分页、释放期限、跨空间元信息脱敏 | 真实 MySQL 生命周期、旧/孤儿 claim、精确 ACK 释放；查询不修改状态 |
+| React 控制台 | 设备/绑定、规则/站点、域名证书、用量、用户、边缘运行观测、配额、ACL、审计、端口查询；侧栏按连接/资源/平台折叠分级 | TypeScript/构建/格式检查、11 项前端逻辑测试、真实与 fixture 浏览器检查 |
+| 发布与运行 | 嵌入静态资源、严格 JSON、版本/校验和、Docker targets、compose/systemd 示例、CI | 构建和嵌入路由测试；见下文验证记录 |
 
-## Acceptance evidence
+## 真实验证与证据
 
-No completed runtime validations yet. Record commands, actual results and limitations as each integration check completes. Never equate a connected carrier with target health, persisted configuration with applied state, or an installed TUN interface with source identity support.
+- `docs/validation/2026-10-20/binary-smoke.json`：真实 MySQL、cloud/edge/client 三正式二进制；TCP 512KiB 与半关闭、UDP 48KB 与零长度、撤销活跃流、嵌入控制台。12 次 loopback 连接/回显/关闭中位数约 1.71ms，样本 P95 约 2.16ms；不代表公网延迟或与 frp 的性能比较。
+- `docs/validation/2026-10-20/native-fullstack.json`：访客与 Agent 位于不同网络命名空间，QUIC/TLS 各自验证 TCP 128KiB、UDP 60KB/零长度，目标逐次比对原始访客 IP+端口；客户端比对 UDP 回包公网源 IP+端口，错误目标源 IP 被丢弃。TCP 与 UDP 活跃流撤销、四条规则 ready、公钥指纹与退出清理均通过。
+- native 特权回归另覆盖本机普通/loopback 与远端 LAN 目标、回程缺失、分片 UDP、权限/能力边界、跨进程源元组冲突、局部安装失败、崩溃恢复和外部 canary 网络对象不被误删。测试显式 opt-in，仅在专用 NET_ADMIN 容器运行。
+- `docs/validation/2026-10-21/auth-browser.json`：正式嵌入前端连接真实 MySQL；人工读取实际 PNG 验证码后注册、登录、核对指纹并绑定设备；重启后账号与绑定保留。普通账号看不到其他空间设备和管理员导航，管理员 API 返回 403；注册确认密码错误在本地拦截，错误验证码自动刷新。390×844 页面无横向溢出。
+- `docs/validation/2026-10-21/console-features.json`：183 项端口分页和协议筛选；相同来源在已发布 v3 命中放行、草稿 v4 使用默认拒绝；未保存编辑模拟允许而数据库仍为 v4 deny；正式 Agent/edge 的实际 QUIC 回显、活动流和签名传输观测显示，到期隐藏。该次浏览器业务观测使用 30 秒租约。
+- 短租约回归使用独立 goroutine 每秒续租，确认 Agent 已取得较新租约而 Edge 仍持有有效旧租约，再建立 QUIC/TLS；同一 TCP 连接持续超过原 10 秒租约，并验证撤销断流和旧快照签名重入被拒绝。证明期限按实际两秒拨号窗口截断，Edge 的本地租约和撤销校验保持严格。
+- `docs/validation/2026-10-21/navigation-browser.json`：连接管理、网络资源、平台管理分组按需展开，概览下管理员只显示 5 个一级入口、普通账号 4 个；详情父菜单高亮、直接进入自动展开、键盘切换和面包屑均通过。390px 手机侧栏不被顶部栏遮挡，组内跳转与 Esc 关闭、无页面横向溢出均通过。
+- `docs/validation/2026-10-21/docker-acceptance.json`：Go 1.26.10 下五个 Docker target 构建和运行身份/工具检查；`docker-cloud-navigation.json` 另验证最终分级菜单的 cloud 镜像、真实 MySQL、非 root、只读根文件系统、无 capabilities、静态资源/深路由和构建标识一致。
+- `docs/validation/2026-10-21/binary-smoke.json`：最终 Go 1.26.10 Linux 三正式二进制在 10 秒租约下通过 TCP 512KiB、UDP 48KB/零长度、活跃流撤销和嵌入控制台验收。`test-suite.json` 记录 Windows/Linux 真实 MySQL 与 Redis race 测试及修正测试生命周期后的完整 systemtest 重跑；没有把首次存在失败的运行记作全通过。
+- `internal/systemtest` 在 QUIC/TLS 下使用真实云控 HTTP API、MySQL、边缘与 Agent，检查设备绑定、TCP/UDP/HTTPS、可信头、落库用量、状态、共享并发与流撤销。独立多边缘用量测试验证 2×48KB 双向 echo 精确结算 196608B，以及在线零速率终止已有连接。
+- 数据库测试在专用 MySQL 8.4 创建随机命名数据库并清理。无 `DRAFRP_TEST_MYSQL_DSN` 时明确 skip，不能将这种执行记作数据库验收。Redis 7.4 测试同样需要显式测试地址。
+- `docs/validation/2026-10-21/resource-quotas.json`：五项配置资源真实 MySQL race 测试，包含三边缘并发限一、迁移后的孤儿端口计额、幂等与旧控制台兼容。`carrier-quality.json` 记录真实 QUIC/TLS 控制 RTT、签名落库、短租约续期、取消/撤销与有界探测；QUIC 当前判丢数不推算 IP 丢包率。`acl-observations.json` 与 `acl-observations-vm.json` 记录实际流量命中、发布收紧关闭旧流，以及下一次真实 ACK 前保持 pending。
 
-Three binaries are required. MySQL is mandatory for cloud. Redis is optional and must degrade only temporary storage. No concrete ACL templates or region lists are preloaded. No PROXY v2 headers are prepended to application streams.
+## 明确边界与尚未完成的设计项
+
+1. **原始 IP 包/TUN 数据路径尚未实现**。现有 Linux native 是已经验证的透明 socket 替代路径，不声称支持 TUN 注入、用户态 TCP/IP 栈、Windows/Wintun 或 IPv6 native。普通 socket 与 HTTP(S) 可在 Windows 使用；native 能力按协议分别检测，严格规则不降级，不插入 PROXY 前缀。
+2. 没有将失效承载上的已有 TCP/HTTP 流迁移或重放。新流可选择新承载；大 UDP 经可靠 stream 保留完整边界，具有可靠有序等待。UDP 不承诺跨失效承载无损迁移；未实现通用 TUN 分段/PMTU/ICMP 转发与迁移代次协议。
+3. 端点失败冷却、QUIC 恢复、握手与持续控制 RTT 已实现，含有界成功/超时/失败窗口和真实 QUIC ACK 统计；主动目标健康、事件历史与窗口速率图尚缺。探测超时不等于 IP 丢包，QUIC 当前判丢不等于重传次数，ready 仍只表示最近真实目标成功观测。
+4. 账号为固定单空间，管理员可将多个用户放入同一空间；没有多空间切换、邀请成员或细粒度 capabilities。公开注册默认配额当前不限，运营者需配置账号配额与节点容量。
+5. 账号与边缘共享限制已实现；规则/设备子限额、细分丢弃计数与持续统计窗口尚未完整实现。跨边缘分配保守，空闲份额不能即时跨节点借用。wire 只约束专用接口出站，物理计数不归属于某个租户。
+6. ACL 已有真实执行、发布、旧流重判、逐条命中和多边缘应用 ACK。观测按 boot/版本隔离，有容量上限与七天保留，不能作为完整访问审计；模拟地域仍来自手动假设，不代表边缘查询结果。地域数据由管理员提供，无真实地域清单内置。HTTP(S) 不使用 TCP/UDP 来源 ACL。
+7. DNS TXT 验证和上传证书已实现；无自动 ACME 证书申请/续期。HTTP(S) 回源当前为 HTTP/1.1 连接池，不声称完成所有 HTTP/2、HTTP/3 转换验收。
+8. 尚未完成可比条件下的 frp v0.71.1 基准、公网 NAT/高丢包/大规模并发压力、所有 IPv6 路径及长期运行观测。不能据 loopback smoke 或使用 QUIC 推导优于 frp。
+
+## 复现入口
+
+常规验证与真实 MySQL/Redis 环境变量见 README。`scripts/smoke.py` 验证普通三二进制路径；`scripts/native_smoke.py` 在明确授权的隔离环境验证 Linux native；`scripts/browser_e2e.py` 管理 Windows 上专属浏览器 QA 进程/数据库及其清理。后两者生成的私钥与真实配置只存忽略的私有 `.runtime` 或虚拟机专属目录，不能提交到仓库。
+
+特权测试显式开关包括 `DRAFRP_NATIVE_TEST=1`、专用 LAN 目标/回程配置和 `DRAFRP_TEST_SHAPING_INTERFACE`。不能在共享主机直接打开这些开关；需要完整命令时先阅读对应测试和本地环境。所有权恢复只允许同一私有状态目录和网络命名空间，不能借恢复逻辑删除未知网络对象。

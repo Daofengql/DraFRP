@@ -1,47 +1,50 @@
-// Package edge is the deliberately small, stateless-at-rest forwarding node.
-// It owns sockets and short-lived authorization snapshots only; cloud storage
-// and account policy remain in the cloud binary.
+// Package edge owns only listeners, authenticated carriers and expiring local
+// forwarding state. Durable identity, policy and accounting belong to cloud.
 package edge
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
+	"crypto/x509"
+	"drafrp/internal/acl"
+	"drafrp/internal/geoip"
+	"drafrp/internal/limiter"
+	"drafrp/internal/model"
+	"drafrp/internal/protocol"
+	"drafrp/internal/shaping"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/quic-go/quic-go"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"drafrp/internal/acl"
-	"drafrp/internal/limiter"
-	"drafrp/internal/model"
-	"drafrp/internal/protocol"
-	"github.com/quic-go/quic-go"
 )
 
 type Config struct {
-	CloudURL       string        `json:"cloud_url"`
-	EdgeID         string        `json:"edge_id"`
-	Token          string        `json:"token"`
-	CAFile         string        `json:"ca_file"`
-	CertFile       string        `json:"cert_file"`
-	KeyFile        string        `json:"key_file"`
-	ListenHost     string        `json:"listen_host"`
-	CertServerName string        `json:"cert_server_name"`
-	SyncInterval   time.Duration `json:"sync_interval"`
-	BootID         string        `json:"boot_id"`
-	LogLevel       string        `json:"log_level"`
+	CloudURL             string          `json:"cloud_url"`
+	EdgeID               string          `json:"edge_id"`
+	Token                string          `json:"token"`
+	CAFile               string          `json:"ca_file"`
+	CertFile             string          `json:"cert_file"`
+	KeyFile              string          `json:"key_file"`
+	ListenHost           string          `json:"listen_host"`
+	SyncInterval         time.Duration   `json:"sync_interval"`
+	BootID               string          `json:"-"`
+	MaxConnections       int             `json:"max_connections"`
+	MaxUDPSessions       int             `json:"max_udp_sessions"`
+	MaxPacketsPerSecond  int             `json:"max_packets_per_second"`
+	MaxPendingHandshakes int             `json:"max_pending_handshakes"`
+	MaxCarriersPerDevice int             `json:"max_carriers_per_device"`
+	UDPIdleTimeout       time.Duration   `json:"udp_idle_timeout"`
+	GeoIPFile            string          `json:"geoip_file"`
+	WireShaping          *shaping.Config `json:"wire_shaping,omitempty"`
 }
 
 func (c *Config) defaults() {
@@ -52,396 +55,705 @@ func (c *Config) defaults() {
 		c.ListenHost = "0.0.0.0"
 	}
 	if c.BootID == "" {
-		b := make([]byte, 16)
-		_, _ = rand.Read(b)
-		c.BootID = hex.EncodeToString(b)
+		c.BootID = protocol.ID()
+	}
+	if c.MaxConnections <= 0 {
+		c.MaxConnections = 1024
+	}
+	if c.MaxUDPSessions <= 0 {
+		c.MaxUDPSessions = 128
+	}
+	if c.MaxPacketsPerSecond <= 0 {
+		c.MaxPacketsPerSecond = 20000
+	}
+	if c.MaxPendingHandshakes <= 0 {
+		c.MaxPendingHandshakes = 32
+	}
+	if c.MaxCarriersPerDevice <= 0 {
+		c.MaxCarriersPerDevice = 8
+	}
+	if c.UDPIdleTimeout <= 0 {
+		c.UDPIdleTimeout = 30 * time.Second
 	}
 }
 
-type Runtime struct {
-	cfg      Config
-	mu       sync.RWMutex
-	snap     model.EdgeSnapshot
-	rules    map[string]*ruleRuntime
-	carriers map[string]*protocol.Carrier
-	usage    map[string]*usageCounter
-	closed   chan struct{}
-	wg       sync.WaitGroup
-	ready    atomic.Bool
-}
 type ruleRuntime struct {
-	rule   model.Rule
-	acl    *acl.Policy
-	grant  model.Grant
-	bucket *limiter.Bucket
-	conns  *limiter.Connections
+	rule        model.Rule
+	policies    []*acl.Policy
+	aclRefs     []model.ACLPolicyRef
+	aclDigest   string
+	policyError string
 }
-type usageCounter struct {
-	mu       sync.Mutex
-	seq      uint64
-	up, down int64
-	closed   bool
-	last     time.Time
+type listenerState struct {
+	closer                io.Closer
+	kind, ruleID, address string
+}
+type carrierState struct {
+	c        *protocol.Carrier
+	endpoint string
+}
+type flowState struct {
+	id         string
+	rule       model.Rule
+	peer       netip.AddrPort
+	generation uint64
+	grantID    string
+	cancel     context.CancelFunc
+	ctx        context.Context
+	budget     *accountBudget
+	carrier    *protocol.Carrier
+	finished   bool
+}
+type Runtime struct {
+	aclMetrics     *aclMetrics
+	cfg            Config
+	mu             sync.RWMutex
+	syncMu         sync.Mutex
+	snap           model.EdgeSnapshot
+	rules          map[string]*ruleRuntime
+	devices        map[string]model.DeviceGrant
+	carriers       map[string]carrierState
+	listeners      map[string]listenerState
+	flows          map[string]*flowState
+	budgets        map[string]*accountBudget
+	history        map[string]*accountBudget
+	statuses       map[string]model.RuleStatus
+	listenerErrors map[string]string
+	certificates   map[string]*tls.Certificate
+	root           *limiter.Bucket
+	rootConns      *limiter.Connections
+	packetRate     *limiter.Flows
+	handshakeSlots chan struct{}
+	udpSlots       chan struct{}
+	http           *http.Client
+	initErr        error
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	once           sync.Once
+	closing        bool
+	scheduler      *capacityScheduler
+	geoDB          *geoip.Database
+	geoError       string
+	shaper         *shaping.Manager
 }
 
 func New(c Config) *Runtime {
 	c.defaults()
-	return &Runtime{cfg: c, rules: map[string]*ruleRuntime{}, carriers: map[string]*protocol.Carrier{}, usage: map[string]*usageCounter{}, closed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	h, e := protocol.HTTPClient(c.CAFile)
+	r := &Runtime{cfg: c, ctx: ctx, cancel: cancel, http: h, initErr: e, rules: map[string]*ruleRuntime{}, devices: map[string]model.DeviceGrant{}, carriers: map[string]carrierState{}, listeners: map[string]listenerState{}, flows: map[string]*flowState{}, budgets: map[string]*accountBudget{}, history: map[string]*accountBudget{}, statuses: map[string]model.RuleStatus{}, listenerErrors: map[string]string{}, certificates: map[string]*tls.Certificate{}, rootConns: limiter.NewConnections(c.MaxConnections), packetRate: limiter.NewFlows(c.MaxPacketsPerSecond), handshakeSlots: make(chan struct{}, c.MaxPendingHandshakes)}
+	if c.WireShaping != nil && r.initErr == nil {
+		r.shaper, r.initErr = shaping.New(*c.WireShaping)
+	}
+	r.scheduler = newCapacityScheduler()
+	r.udpSlots = make(chan struct{}, c.MaxUDPSessions)
+	r.wg.Add(2)
+	go r.watch()
+	go r.schedule()
+	return r
+}
+func (r *Runtime) Config() Config { return r.cfg }
+func (r *Runtime) launchLocked(fn func()) bool {
+	if r.closing {
+		return false
+	}
+	r.wg.Add(1)
+	go func() { defer r.wg.Done(); fn() }()
+	return true
 }
 func (r *Runtime) Close() {
-	select {
-	case <-r.closed:
-		return
-	default:
-		close(r.closed)
-	}
-	r.mu.Lock()
-	for _, c := range r.carriers {
-		_ = c.Close()
-	}
-	r.mu.Unlock()
-	r.wg.Wait()
+	r.once.Do(func() {
+		r.mu.Lock()
+		r.closing = true
+		r.cancel()
+		for _, l := range r.listeners {
+			_ = l.closer.Close()
+		}
+		for _, cs := range r.carriers {
+			_ = cs.c.Close()
+		}
+		for _, f := range r.flows {
+			f.cancel()
+		}
+		for _, b := range r.budgets {
+			b.retire()
+		}
+		r.mu.Unlock()
+		r.wg.Wait()
+		if r.http != nil {
+			r.http.CloseIdleConnections()
+		}
+		if r.shaper != nil {
+			if err := r.shaper.Close(); err != nil {
+				log.Printf("wire shaping cleanup: %v", err)
+			}
+		}
+	})
 }
-func (r *Runtime) Snapshot() model.EdgeSnapshot { r.mu.RLock(); defer r.mu.RUnlock(); return r.snap }
-func (r *Runtime) Ready() bool                  { return r.ready.Load() }
+func (r *Runtime) Snapshot() model.EdgeSnapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	b, _ := json.Marshal(r.snap)
+	var s model.EdgeSnapshot
+	_ = json.Unmarshal(b, &s)
+	return s
+}
+func (r *Runtime) Ready() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closing || !time.Now().Before(r.snap.ExpiresAt) || !r.capacityAvailable() {
+		return false
+	}
+	if len(r.snap.Edge.Endpoints) == 0 {
+		return true
+	}
+	for _, l := range r.listeners {
+		if l.kind == "carrier" {
+			return true
+		}
+	}
+	return false
+}
 func (r *Runtime) Sync(ctx context.Context) error {
+	r.syncMu.Lock()
+	defer r.syncMu.Unlock()
+	if r.initErr != nil {
+		return r.initErr
+	}
 	if r.cfg.CloudURL == "" || r.cfg.EdgeID == "" || r.cfg.Token == "" {
 		return errors.New("cloud_url, edge_id and token are required")
 	}
-	client, e := protocol.HTTPClient(r.cfg.CAFile)
-	if e != nil {
-		return e
+	r.mu.Lock()
+	req := model.EdgeSyncRequest{EdgeID: r.cfg.EdgeID, BootID: r.cfg.BootID, AppliedRevision: r.snap.Revision, Runtime: r.runtimeLocked()}
+	req.ACL = r.aclReportLocked()
+	r.refreshStatusesLocked()
+	for _, st := range r.statuses {
+		req.Statuses = append(req.Statuses, st)
 	}
-	r.mu.RLock()
-	req := model.EdgeSyncRequest{EdgeID: r.cfg.EdgeID, BootID: r.cfg.BootID, AppliedRevision: r.snap.Revision}
-	for _, c := range r.usage {
-		c.mu.Lock()
-		req.Usage = append(req.Usage, model.Usage{GrantID: "", Sequence: c.seq, UploadBytes: c.up, DownloadBytes: c.down, Closed: c.closed, ObservedAt: c.last})
-		c.mu.Unlock()
+	for _, b := range r.history {
+		req.Usage = append(req.Usage, b.report())
 	}
-	r.mu.RUnlock()
-	b, _ := json.Marshal(req)
-	url := strings.TrimRight(r.cfg.CloudURL, "/") + "/api/v1/runtime/edge/sync"
-	hr, e := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(b)))
+	r.mu.Unlock()
+	body, _ := json.Marshal(req)
+	hr, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(r.cfg.CloudURL, "/")+"/api/v1/runtime/edge/sync", strings.NewReader(string(body)))
 	if e != nil {
 		return e
 	}
 	hr.Header.Set("Authorization", "Bearer "+r.cfg.Token)
 	hr.Header.Set("Content-Type", "application/json")
-	resp, e := client.Do(hr)
+	res, e := r.http.Do(hr)
 	if e != nil {
 		return e
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("cloud sync: HTTP %s", resp.Status)
+	defer res.Body.Close()
+	if res.StatusCode/100 != 2 {
+		var out struct {
+			Error struct{ Code, Message string }
+		}
+		_ = json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&out)
+		return fmt.Errorf("edge sync HTTP %d %s: %s", res.StatusCode, out.Error.Code, out.Error.Message)
 	}
 	var s model.EdgeSnapshot
-	if e = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&s); e != nil {
+	if e = json.NewDecoder(io.LimitReader(res.Body, 8<<20)).Decode(&s); e != nil {
 		return e
 	}
-	if s.Edge.ID != "" && s.Edge.ID != r.cfg.EdgeID {
-		return errors.New("cloud returned wrong edge")
+	if e = r.apply(s); e != nil {
+		r.failedACLApply(s, e)
+		return e
 	}
-	r.apply(s)
+	// A successful response acknowledges the exact cumulative reports sent.
+	r.mu.Lock()
+	r.acknowledgeACLLocked(req.ACL)
+	for _, u := range req.Usage {
+		if u.Closed {
+			if b := r.history[u.GrantID]; b != nil && b.isSettled(u) {
+				delete(r.history, u.GrantID)
+			}
+		}
+	}
+	r.mu.Unlock()
 	return nil
 }
-func (r *Runtime) apply(s model.EdgeSnapshot) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !s.ExpiresAt.IsZero() && time.Now().After(s.ExpiresAt) {
-		r.ready.Store(false)
-		return
+func (r *Runtime) apply(s model.EdgeSnapshot) error {
+	if !r.capacityAvailable() {
+		return errors.New("wire shaping verification failed")
 	}
-	r.snap = s
-	valid := map[string]model.Grant{}
-	for _, g := range s.Grants {
-		valid[g.ID] = g
+	if s.Edge.ID != r.cfg.EdgeID || s.Edge.BootID != r.cfg.BootID || !time.Now().Before(s.ExpiresAt) {
+		return errors.New("invalid, expired or wrong-boot edge snapshot")
+	}
+	if len(s.Rules) > 4096 || len(s.Devices) > 4096 || len(s.Grants) > 4096 || len(s.MandatoryACLs) > 64 {
+		return errors.New("snapshot exceeds edge capacity")
+	}
+	var geo *geoip.Database
+	var geoError string
+	if r.cfg.GeoIPFile != "" {
+		var e error
+		geo, e = geoip.Load(r.cfg.GeoIPFile)
+		if e != nil {
+			geoError = e.Error()
+		}
+	}
+	var lookup func(netip.Addr) (string, string, bool)
+	if geo != nil {
+		lookup = geo.Lookup
+	}
+	mandatory := []*acl.Policy{}
+	mandatoryRefs := []model.ACLPolicyRef{}
+	mandatoryGeoMissing := false
+	for _, p := range s.MandatoryACLs {
+		compiled, e := acl.CompileWithGeo(p, lookup)
+		if e != nil {
+			return fmt.Errorf("mandatory ACL: %w", e)
+		}
+		mandatory = append(mandatory, compiled)
+		mandatoryRefs = append(mandatoryRefs, acl.Reference(p, "mandatory_template"))
+		mandatoryGeoMissing = mandatoryGeoMissing || compiled.RequiresGeo() && geo == nil
 	}
 	next := map[string]*ruleRuntime{}
+	statuses := map[string]model.RuleStatus{}
 	for _, v := range s.Rules {
-		if !v.Enabled || v.Protocol != "tcp" && v.Protocol != "udp" {
+		if v.ID == "" || v.EdgeID != r.cfg.EdgeID || v.DeviceID == "" || v.TenantID == "" || v.Version == 0 {
+			return errors.New("rule identity mismatch in edge snapshot")
+		}
+		if _, ok := next[v.ID]; ok {
+			return errors.New("duplicate rule")
+		}
+		st := model.RuleStatus{ID: v.ID, Version: v.Version, Status: "waiting_for_agent"}
+		rr := &ruleRuntime{rule: v}
+		if v.Deleting {
+			st.Status = "deleted"
+			statuses[v.ID] = st
 			continue
 		}
-		var pol *acl.Policy
-		if v.ACL != nil {
-			pol, _ = acl.Compile(*v.ACL)
+		if !v.Enabled {
+			st.Status = "disabled"
+			statuses[v.ID] = st
+			continue
 		}
-		g := valid[v.TenantID+":"+s.Edge.ID]
-		if g.ID == "" {
-			for _, x := range s.Grants {
-				if x.TenantID == v.TenantID {
-					g = x
-					break
+		if v.Protocol == "tcp" || v.Protocol == "udp" {
+			if v.SourceMode != "socket" && v.SourceMode != "native" {
+				rr.policyError = "unsupported source identity mode"
+			}
+			if v.SourceMode == "native" {
+				available := false
+				for _, d := range s.Devices {
+					if d.DeviceID == v.DeviceID && d.TenantID == v.TenantID && time.Now().Before(d.ExpiresAt) {
+						for _, c := range d.Capabilities {
+							available = available || c == "native_"+v.Protocol+"_ipv4_ip_port"
+						}
+					}
+				}
+				if !available {
+					rr.policyError = "capability_missing: verified native IPv4 IP and port capability is unavailable"
 				}
 			}
+			rr.policies = append(rr.policies, mandatory...)
+			rr.aclRefs = append(rr.aclRefs, mandatoryRefs...)
+			if mandatoryGeoMissing {
+				rr.policyError = "capability_missing: mandatory regional ACL requires a valid GeoIP database"
+			}
+			if v.ACLTemplateID != "" && v.ACL == nil {
+				rr.policyError = "required ACL template is unavailable"
+			}
+			if v.ACL != nil {
+				p, e := acl.CompileWithGeo(*v.ACL, lookup)
+				if e != nil {
+					rr.policyError = "invalid ACL: " + e.Error()
+				} else {
+					rr.policies = append(rr.policies, p)
+					kind := "rule_inline"
+					if v.ACLTemplateID != "" {
+						kind = "rule_template"
+					}
+					rr.aclRefs = append(rr.aclRefs, acl.Reference(*v.ACL, kind))
+					if p.RequiresGeo() && geo == nil {
+						rr.policyError = "capability_missing: regional ACL requires a valid GeoIP database"
+					}
+				}
+			}
+		} else if v.Protocol == "http" || v.Protocol == "https" {
+			if v.SourceMode != "forwarded_headers" || v.Domain == "" {
+				rr.policyError = "invalid HTTP source mode or domain"
+			}
+		} else {
+			rr.policyError = "unsupported protocol"
 		}
-		rr := &ruleRuntime{rule: v, acl: pol, grant: g, bucket: limiter.New(g), conns: limiter.NewConnections(g.MaxConnections)}
+		rr.aclDigest = acl.EffectiveDigest(v.ID, v.Version, rr.aclRefs)
+		if rr.policyError != "" {
+			st.Status = "error"
+			st.Error = rr.policyError
+		}
 		next[v.ID] = rr
+		statuses[v.ID] = st
 	}
-	for id, old := range r.rules {
-		if n := next[id]; n == nil || n.rule.Version != old.rule.Version || n.rule.Enabled == false {
-			r.closeRuleLocked(id)
+	devices := map[string]model.DeviceGrant{}
+	for _, d := range s.Devices {
+		if d.DeviceID == "" || d.TenantID == "" || d.SessionID == "" || d.Generation == 0 {
+			return errors.New("invalid device grant")
 		}
-	}
-	r.rules = next
-	r.ready.Store(true)
-	r.ensureListenersLocked()
-}
-func (r *Runtime) closeRuleLocked(id string) {
-	for k, c := range r.carriers {
-		if strings.HasPrefix(k, id+"/") {
-			_ = c.Close()
-			delete(r.carriers, k)
+		if _, ok := devices[d.DeviceID]; ok {
+			return errors.New("duplicate device grant")
 		}
+		devices[d.DeviceID] = d
 	}
-}
-func (r *Runtime) ensureListenersLocked() {
-	for _, rr := range r.rules {
-		key := rr.rule.ID
-		switch rr.rule.Protocol {
-		case "tcp":
-			if _, ok := r.carriers["listen/"+key]; !ok {
-				ln, e := net.Listen("tcp", net.JoinHostPort(r.cfg.ListenHost, strconv.Itoa(rr.rule.PublicPort)))
-				if e != nil {
-					log.Printf("edge rule %s listen: %v", key, e)
-					continue
-				}
-				r.carriers["listen/"+key] = nil
-				r.wg.Add(1)
-				go r.acceptTCP(rr, ln)
-			}
-		case "udp":
-			if _, ok := r.carriers["listen/"+key]; !ok {
-				pc, e := net.ListenPacket("udp", net.JoinHostPort(r.cfg.ListenHost, strconv.Itoa(rr.rule.PublicPort)))
-				if e != nil {
-					log.Printf("edge rule %s UDP listen: %v", key, e)
-					continue
-				}
-				r.carriers["listen/"+key] = nil
-				r.wg.Add(1)
-				go r.acceptUDP(rr, pc)
-			}
-		}
-	}
-}
-func (r *Runtime) pickCarrier(rule model.Rule) (*protocol.Carrier, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, c := range r.carriers {
-		if c != nil && c.Device.DeviceID == rule.DeviceID && c.Done() != nil {
-			return c, nil
-		}
-	}
-	return nil, errors.New("client offline")
-}
-func (r *Runtime) allow(rr *ruleRuntime, peer net.Addr) bool {
-	if rr.acl == nil {
-		return true
-	}
-	host, port, _ := net.SplitHostPort(peer.String())
-	ip, e := netipParse(host)
-	if e != nil {
-		return false
-	}
-	p, _ := strconv.Atoi(port)
-	ok, _ := rr.acl.Allow(ip, rr.rule.Protocol, p)
-	return ok
-}
-func netipParse(s string) (netip.Addr, error) { return netip.ParseAddr(s) }
-func (r *Runtime) acceptTCP(rr *ruleRuntime, ln net.Listener) {
-	defer r.wg.Done()
-	for {
-		conn, e := ln.Accept()
+	certs := map[string]*tls.Certificate{}
+	for _, c := range s.Certificates {
+		pair, e := tls.X509KeyPair([]byte(c.CertPEM), []byte(c.KeyPEM))
 		if e != nil {
-			return
+			return fmt.Errorf("certificate %s: %w", c.ID, e)
 		}
-		if !r.allow(rr, conn.RemoteAddr()) || !rr.conns.Acquire() {
-			_ = conn.Close()
-			continue
-		}
-		r.wg.Add(1)
-		go func() { defer r.wg.Done(); defer rr.conns.Release(); r.forwardTCP(rr, conn) }()
-	}
-}
-func (r *Runtime) forwardTCP(rr *ruleRuntime, conn net.Conn) {
-	defer conn.Close()
-	c, e := r.pickCarrier(rr.rule)
-	if e != nil {
-		return
-	}
-	s, e := c.Open(context.Background())
-	if e != nil {
-		return
-	}
-	defer protocol.Abort(s)
-	c.AddActive(1)
-	defer c.AddActive(-1)
-	flow := protocol.Flow{RuleID: rr.rule.ID, Version: rr.rule.Version, ID: protocol.FlowID(), Protocol: "tcp", Peer: conn.RemoteAddr().String()}
-	if e = protocol.WriteJSON(s, flow); e != nil {
-		return
-	}
-	if e = pipeConn(conn, s, rr.bucket, nil); e != nil {
-		return
-	}
-}
-
-// ConnOrStream is kept internal to make forwarding code explicit for both TCP and QUIC.
-type ConnOrStream interface {
-	io.ReadWriter
-	SetDeadline(time.Time) error
-}
-
-func copyBound(dst io.Writer, src io.Reader, b *limiter.Bucket, usage *usageCounter) error {
-	buf := make([]byte, 32<<10)
-	for {
-		n, e := src.Read(buf)
-		if n > 0 {
-			if b != nil && !b.Wait(n, time.Now().Add(5*time.Second)) {
-				return errors.New("rate limit")
-			}
-			if _, w := dst.Write(buf[:n]); w != nil {
-				return w
-			}
-			if usage != nil {
-				usage.mu.Lock()
-				usage.up += int64(n)
-				usage.mu.Unlock()
-			}
-		}
+		pair.Leaf, e = x509.ParseCertificate(pair.Certificate[0])
 		if e != nil {
-			if e == io.EOF {
-				return nil
-			}
 			return e
 		}
+		if _, duplicate := certs[c.ID]; duplicate || c.ID == "" {
+			return errors.New("duplicate or empty certificate ID")
+		}
+		certs[c.ID] = &pair
 	}
-}
-func pipeConn(a, b ConnOrStream, bucket *limiter.Bucket, usage *usageCounter) error {
-	err := make(chan error, 2)
-	go func() { err <- copyBound(b, a, bucket, usage) }()
-	go func() { err <- copyBound(a, b, bucket, usage) }()
-	return <-err
-}
-func (r *Runtime) acceptUDP(rr *ruleRuntime, pc net.PacketConn) {
-	defer r.wg.Done()
-	buf := make([]byte, 64<<10)
-	type flow struct {
-		conn net.Conn
-		last time.Time
+	valid := map[string]bool{}
+	for _, g := range s.Grants {
+		if g.ID == "" || g.TenantID == "" || g.EdgeID != r.cfg.EdgeID || g.BootID != r.cfg.BootID || g.Bytes < 0 || g.Bytes > 1<<60 || g.BaseBPS < -1 || g.PeakBPS < -1 || g.BurstBytes < 0 || g.MaxConnections < -1 || g.NewFlowsPerSecond < -1 {
+			return errors.New("invalid grant identity, credit or limit")
+		}
+		if valid[g.TenantID] {
+			return errors.New("duplicate tenant budget")
+		}
+		valid[g.TenantID] = true
 	}
-	flows := map[string]flow{}
-	for {
-		n, peer, e := pc.ReadFrom(buf)
-		if e != nil {
-			return
-		}
-		if !r.allow(rr, peer) || !rr.conns.Acquire() {
-			continue
-		}
-		c, e := r.pickCarrier(rr.rule)
-		if e != nil {
-			rr.conns.Release()
-			continue
-		}
-		id := protocol.FlowID()
-		s, e := c.Open(context.Background())
-		if e != nil {
-			rr.conns.Release()
-			continue
-		}
-		_ = protocol.WriteJSON(s, protocol.Flow{RuleID: rr.rule.ID, Version: rr.rule.Version, ID: id, Protocol: "udp", Peer: peer.String()})
-		_ = protocol.WritePacket(s, buf[:n])
-		flows[peer.String()+"/"+strconv.FormatUint(id, 10)] = flow{conn: nil, last: time.Now()}
-		go func() {
-			defer rr.conns.Release()
-			defer protocol.Abort(s)
-			for {
-				b, e := protocol.ReadPacket(s)
-				if e != nil {
-					return
-				}
-				_, _ = pc.WriteTo(b, peer)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing {
+		return errors.New("edge closed")
+	}
+	if s.Revision < r.snap.Revision {
+		return errors.New("snapshot revision moved backwards")
+	}
+	// Validate all renewable balances before changing any current authority.
+	for _, g := range s.Grants {
+		if b := r.budgets[g.TenantID]; b != nil && b.id() == g.ID {
+			if e := b.canUpdate(g); e != nil {
+				return e
 			}
-		}()
+		} else if _, replayed := r.history[g.ID]; replayed {
+			return errors.New("retired grant cannot be reloaded")
+		}
+	}
+	// A ready observation is preserved only for this exact rule version and while
+	// the authoritative device, carrier and resource grant are still available.
+	for id, st := range statuses {
+		old, ok := r.statuses[id]
+		if ok && old.Version == st.Version && old.Status == "ready" && st.Error == "" && st.Status == "waiting_for_agent" {
+			st.Status = "ready"
+			statuses[id] = st
+		}
+	}
+	r.snap = s
+	r.geoDB, r.geoError = geo, geoError
+	r.rules = next
+	r.devices = devices
+	r.certificates = certs
+	r.statuses = statuses
+	for _, g := range s.Grants {
+		if b := r.budgets[g.TenantID]; b != nil && b.id() == g.ID {
+			if e := b.update(g); e != nil {
+				return e
+			}
+		} else {
+			if b != nil {
+				b.retire()
+			}
+			b := newAccountBudget(g)
+			r.budgets[g.TenantID] = b
+			r.history[g.ID] = b
+		}
+	}
+	for tid, b := range r.budgets {
+		if !valid[tid] {
+			b.retire()
+			delete(r.budgets, tid)
+		}
+	}
+	rootGrant := model.Grant{BaseBPS: s.Edge.CapacityBPS, PeakBPS: s.Edge.CapacityBPS, BurstBytes: 64 << 10, ExpiresAt: s.ExpiresAt}
+	if r.root == nil {
+		r.root = limiter.New(rootGrant)
+	} else {
+		r.root.Update(rootGrant)
+	}
+	r.reconcileLocked()
+	r.ensureListenersLocked()
+	r.refreshStatusesLocked()
+	r.appliedACLLocked(s)
+	return nil
+}
+func (r *Runtime) watch() {
+	defer r.wg.Done()
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-t.C:
+			r.mu.Lock()
+			r.reconcileLocked()
+			r.refreshStatusesLocked()
+			r.mu.Unlock()
+		}
 	}
 }
-
-// ServeCarrier authenticates an incoming QUIC/TLS carrier and serves agent streams.
+func (r *Runtime) deviceValidLocked(c *protocol.Carrier) bool {
+	d, ok := r.devices[c.Device.DeviceID]
+	return ok && time.Now().Before(d.ExpiresAt) && d.SessionID == c.Device.SessionID && d.Generation == c.Device.Generation && d.TenantID == c.Device.TenantID
+}
+func (r *Runtime) reconcileLocked() {
+	valid := time.Now().Before(r.snap.ExpiresAt) && !r.closing && r.capacityAvailable()
+	for key, cs := range r.carriers {
+		closed := false
+		select {
+		case <-cs.c.Done():
+			closed = true
+		default:
+		}
+		if !valid || closed || !r.deviceValidLocked(cs.c) {
+			_ = cs.c.Close()
+			delete(r.carriers, key)
+		}
+	}
+	for _, f := range r.flows {
+		rr := r.rules[f.rule.ID]
+		if !valid || rr == nil || rr.rule.Version != f.rule.Version || rr.rule.DeviceID != f.rule.DeviceID || rr.policyError != "" || !r.deviceValidLocked(f.carrier) || !f.budget.valid() || r.budgets[f.rule.TenantID] != f.budget || !rr.allow(f.peer) {
+			f.cancel()
+		}
+	}
+	if !valid {
+		for key, l := range r.listeners {
+			_ = l.closer.Close()
+			delete(r.listeners, key)
+		}
+		return
+	}
+	for key, l := range r.listeners {
+		if l.ruleID != "" {
+			rr := r.rules[l.ruleID]
+			if rr == nil || rr.policyError != "" || l.address != r.ruleAddress(rr.rule) || l.kind != rr.rule.Protocol {
+				_ = l.closer.Close()
+				delete(r.listeners, key)
+			}
+		}
+	}
+}
+func (rr *ruleRuntime) allow(peer netip.AddrPort) bool {
+	if rr.policyError != "" {
+		return false
+	}
+	if rr.rule.Protocol != "tcp" && rr.rule.Protocol != "udp" {
+		return true
+	}
+	for _, p := range rr.policies {
+		if ok, _ := p.Allow(peer.Addr(), rr.rule.Protocol, int(peer.Port())); !ok {
+			return false
+		}
+	}
+	return true
+}
+func (r *Runtime) ruleAddress(rule model.Rule) string {
+	return net.JoinHostPort(r.cfg.ListenHost, strconv.Itoa(rule.PublicPort))
+}
+func (r *Runtime) pickCarrierLocked(rule model.Rule) *protocol.Carrier {
+	var chosen *protocol.Carrier
+	for _, cs := range r.carriers {
+		c := cs.c
+		if c.Device.DeviceID != rule.DeviceID || c.Device.TenantID != rule.TenantID || !r.deviceValidLocked(c) {
+			continue
+		}
+		if rule.Transport == "quic_only" && c.Transport != "quic" || rule.Transport == "tls_only" && c.Transport != "tls" {
+			continue
+		}
+		select {
+		case <-c.Done():
+			continue
+		default:
+		}
+		if chosen == nil || c.Active() < chosen.Active() || c.Active() == chosen.Active() && c.Transport == "quic" && chosen.Transport != "quic" {
+			chosen = c
+		}
+	}
+	return chosen
+}
+func (r *Runtime) refreshStatusesLocked() {
+	for id, rr := range r.rules {
+		st := r.statuses[id]
+		if !r.capacityAvailable() {
+			st.Status = "error"
+			st.Error = "wire_shaping_unavailable"
+		} else if rr.policyError != "" {
+			st.Status = "error"
+			st.Error = rr.policyError
+		} else if !time.Now().Before(r.snap.ExpiresAt) {
+			st.Status = "error"
+			st.Error = "authorization_expired"
+		} else if _, ok := r.listeners["rule/"+id]; (rr.rule.Protocol == "tcp" || rr.rule.Protocol == "udp") && !ok {
+			st.Status = "error"
+			st.Error = r.listenerErrors["rule/"+id]
+		} else if rr.rule.Protocol == "http" || rr.rule.Protocol == "https" {
+			port := r.snap.Edge.HTTPPort
+			if rr.rule.Protocol == "https" {
+				port = r.snap.Edge.HTTPSPort
+			}
+			key := "site/" + rr.rule.Protocol + "/" + strconv.Itoa(port)
+			if _, ok := r.listeners[key]; !ok {
+				st.Status = "error"
+				st.Error = "site_listener_unavailable: " + r.listenerErrors[key]
+				r.statuses[id] = st
+				continue
+			}
+			// Continue through the shared carrier and budget checks below.
+			r.statuses[id] = r.availableStatusLocked(rr.rule, st)
+			continue
+		} else if r.pickCarrierLocked(rr.rule) == nil {
+			st.Status = "waiting_for_agent"
+			st.Error = ""
+		} else if b := r.budgets[rr.rule.TenantID]; b == nil || !b.valid() {
+			st.Status = "quota_exhausted"
+			st.Error = "account budget unavailable or exhausted"
+		} else if st.Status != "ready" && st.Status != "error" {
+			st.Status = "listening"
+			st.Error = ""
+		}
+		r.statuses[id] = st
+	}
+}
+func (r *Runtime) availableStatusLocked(rule model.Rule, st model.RuleStatus) model.RuleStatus {
+	if r.pickCarrierLocked(rule) == nil {
+		st.Status, st.Error = "waiting_for_agent", ""
+	} else if b := r.budgets[rule.TenantID]; b == nil || !b.valid() {
+		st.Status, st.Error = "quota_exhausted", "account budget unavailable or exhausted"
+	} else if st.Status != "ready" && st.Status != "error" {
+		st.Status, st.Error = "listening", ""
+	}
+	return st
+}
+func (r *Runtime) markStatus(rule model.Rule, state string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rr := r.rules[rule.ID]; rr == nil || rr.rule.Version != rule.Version {
+		return
+	}
+	st := model.RuleStatus{ID: rule.ID, Version: rule.Version, Status: state}
+	if err != nil {
+		st.Error = err.Error()
+	}
+	r.statuses[rule.ID] = st
+}
 func (r *Runtime) ServeCarrier(ctx context.Context, c *protocol.Carrier) {
+	r.mu.Lock()
+	if !r.launchLocked(func() { r.serveCarrier(ctx, c, "") }) {
+		_ = c.Close()
+	}
+	r.mu.Unlock()
+}
+func (r *Runtime) serveCarrier(ctx context.Context, c *protocol.Carrier, endpoint string) {
+	defer c.Close()
+	select {
+	case r.handshakeSlots <- struct{}{}:
+	default:
+		return
+	}
 	lookup := func(id string) (model.DeviceGrant, bool) {
 		r.mu.RLock()
 		defer r.mu.RUnlock()
-		for _, d := range r.snap.Devices {
-			if d.DeviceID == id {
-				return d, true
-			}
-		}
-		return model.DeviceGrant{}, false
+		d, ok := r.devices[id]
+		return d, ok && time.Now().Before(r.snap.ExpiresAt)
 	}
-	if err := protocol.AuthenticateEdge(ctx, c, lookup); err != nil {
-		_ = c.Close()
+	err := protocol.AuthenticateEdge(ctx, c, lookup)
+	<-r.handshakeSlots
+	if err != nil {
 		return
 	}
 	r.mu.Lock()
-	key := protocol.ID()
-	r.carriers[key] = c
-	r.mu.Unlock()
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		defer c.Close()
-		for {
-			st, e := c.Accept(ctx)
-			if e != nil {
-				return
-			}
-			r.wg.Add(1)
-			go func() { defer r.wg.Done(); r.serveAgentStream(st) }()
+	if r.closing || !r.deviceValidLocked(c) {
+		r.mu.Unlock()
+		return
+	}
+	count := 0
+	for _, cs := range r.carriers {
+		if cs.c.Device.DeviceID == c.Device.DeviceID {
+			count++
 		}
-	}()
+	}
+	if count >= r.cfg.MaxCarriersPerDevice || len(r.carriers) >= r.snap.Edge.MaxCarriers {
+		r.mu.Unlock()
+		return
+	}
+	key := protocol.ID()
+	r.carriers[key] = carrierState{c, endpoint}
+	r.refreshStatusesLocked()
+	r.mu.Unlock()
+	defer func() { r.mu.Lock(); delete(r.carriers, key); r.mu.Unlock() }()
+	// Business streams remain edge-initiated. Agent streams can only echo the
+	// negotiated fixed control probe, under renewable device authorization.
+	// A synchronous handler bounds incoming control concurrency to one per
+	// carrier and leaves business opening/flow permits available.
+	for {
+		st, e := c.Accept(ctx)
+		if e != nil {
+			return
+		}
+		c.HandleProbe(ctx, st, func() bool {
+			r.mu.RLock()
+			defer r.mu.RUnlock()
+			return !r.closing && time.Now().Before(r.snap.ExpiresAt) && r.deviceValidLocked(c)
+		})
+	}
 }
-func (r *Runtime) serveAgentStream(st protocol.Stream) {
-	defer protocol.Abort(st)
-	var f protocol.Flow
-	if e := protocol.ReadJSON(st, &f); e != nil {
-		return
-	}
-	r.mu.RLock()
-	rr := r.rules[f.RuleID]
-	r.mu.RUnlock()
-	if rr == nil || rr.rule.Version != f.Version || rr.rule.Protocol != "tcp" {
-		return
-	}
-	target, e := net.DialTimeout("tcp", rr.rule.Target, 8*time.Second)
-	if e != nil {
-		return
-	}
-	defer target.Close()
-	_ = protocol.WriteJSON(st, protocol.Result{})
-	_ = pipeConn(target, st, rr.bucket, nil)
-}
-
 func ListenQUIC(cfg Config, addr string) (*quic.Listener, error) {
-	cert, e := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	pair, e := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 	if e != nil {
 		return nil, e
 	}
-	tc := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}
-	return quic.ListenAddr(addr, tc, protocol.QUICConfig())
+	return quic.ListenAddr(addr, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}, protocol.QUICConfig())
 }
-func (r *Runtime) HTTPHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
-		if q.URL.Path != "/healthz" {
-			http.NotFound(w, q)
-			return
+func (r *Runtime) Run(ctx context.Context) error {
+	defer r.Close()
+	if r.initErr != nil {
+		return r.initErr
+	}
+	if _, e := tls.LoadX509KeyPair(r.cfg.CertFile, r.cfg.KeyFile); e != nil {
+		return e
+	}
+	var shapingFailed <-chan struct{}
+	if r.shaper != nil {
+		shapingFailed = r.shaper.Failed()
+	}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-shapingFailed:
+			// Report the verified failure while the process still owns its identity
+			// and accounting. apply rejects every response while shaping is down.
+			r.mu.Lock()
+			r.reconcileLocked()
+			r.refreshStatusesLocked()
+			r.mu.Unlock()
+			reportCtx, reportCancel := context.WithTimeout(context.Background(), 4*time.Second)
+			_ = r.Sync(reportCtx)
+			reportCancel()
+			return errors.New("wire shaping verification failed: " + r.shaper.Status().Error)
+		case <-timer.C:
+			syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			e := r.Sync(syncCtx)
+			cancel()
+			delay := r.cfg.SyncInterval
+			if e != nil {
+				log.Printf("cloud sync: %v", e)
+				delay = min(delay, 3*time.Second)
+			}
+			timer.Reset(delay)
 		}
-		if !r.Ready() {
-			http.Error(w, "edge snapshot unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
+	}
 }
-
-var _ = os.ErrClosed

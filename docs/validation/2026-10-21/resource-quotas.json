@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "scope": "configuration resource counts, not per-device or per-rule runtime budgets",
+  "database": "dedicated MySQL 8.4 through the Hyper-V test VM",
+  "windows": {
+    "command": "go test -race ./internal/cloud -run TestMySQLResourceQuota -count=1 -timeout=5m",
+    "exit_code": 0,
+    "seconds": 100.217,
+    "top_level_tests": 5
+  },
+  "verified": [
+    "New quotas default to unlimited; older updates preserve omitted resource limits; explicit zero blocks growth.",
+    "Role and tenant isolation, numeric bounds, server-owned usage and observation timestamps.",
+    "Concurrent device binding and domain creation admit exactly one at a limit of one; denied bindings remain pending.",
+    "Concurrent rule creation on three distinct edges shares one account-wide rule or port allowance.",
+    "TCP and UDP using the same numeric port consume separate slots; HTTP sites consume a rule but no shared-listener port slot.",
+    "Lowered limits allow edits without growth; moving a port retains and charges the old reservation.",
+    "A deleted rule's orphan reservation remains charged until expiry; valid expiry restores capacity.",
+    "Repeated additive migration restores owners from current rules and creation audits, recreates the owner index and preserves saved limits.",
+    "Unattributed live legacy reservations block finite port growth until expiry or ownership repair.",
+    "Successful idempotent domain creation retries do not consume another slot."
+  ],
+  "test_fixture_repair": "The first expanded concurrency run reused occupied edge resources between independent cases. Each case now owns distinct edges; the complete targeted suite was rerun successfully."
+}

@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "binary_roles": [
+    "cloud",
+    "edge",
+    "client"
+  ],
+  "tcp_large_bytes": 524288,
+  "udp_max_tested_bytes": 48000,
+  "zero_length_udp": true,
+  "active_flow_revocation": true,
+  "release_console_embedded": true,
+  "connect_echo_close_ms_median": 1.707698502286803,
+  "connect_echo_close_ms_p95": 2.161150005122181,
+  "samples": 12,
+  "note": "loopback smoke timing; not a WAN/frp performance comparison"
+}

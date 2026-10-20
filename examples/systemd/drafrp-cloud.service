@@ -1,0 +1,19 @@
+[Unit]
+Description=DraFRP control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=drafrp
+Group=drafrp
+ExecStart=/usr/local/bin/drafrp-cloud --config /etc/drafrp/cloud.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

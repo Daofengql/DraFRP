@@ -2,24 +2,104 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"drafrp/internal/buildinfo"
+	"drafrp/internal/client"
+	"drafrp/internal/config"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"drafrp/internal/client"
 )
 
 func main() {
 	var path string
-	flag.StringVar(&path,"config","client.json","JSON configuration file"); flag.Parse()
-	b,e:=os.ReadFile(path);if e!=nil{log.Fatal(e)};var cfg client.Config;if e=json.Unmarshal(b,&cfg);e!=nil{log.Fatal(e)}
-	a,e:=client.New(cfg);if e!=nil{log.Fatal(e)};defer a.Close();ctx,cancel:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer cancel()
-	if cfg.Bind || cfg.BindCode!="" { br,e:=a.Bind(ctx);if e!=nil{log.Fatal(e)};log.Printf("binding id=%s user_code=%s verification_uri=%s",br.ID,br.UserCode,br.VerificationURI);for {if cfg.BindCode!="" {break};select{case<-ctx.Done():return;case<-time.After(2*time.Second):};br,e=a.PollBind(ctx,br.ID,br.PollToken);if e!=nil{log.Printf("bind poll: %v",e);continue};if br.Status=="approved"{break};if br.Status=="expired"{log.Fatal("binding expired")}};if cfg.BindCode!=""{for{br,e=a.PollBind(ctx,br.ID,cfg.PollToken);if e==nil&&br.Status=="approved"{break};select{case<-ctx.Done():return;case<-time.After(2*time.Second):}}}}
-	if _,e=a.Sync(ctx);e!=nil{log.Fatal(e)}
-	for{snap:=a.Snapshot();for _,e:=range snap.Edges{if _,ok:=current(a,e.ID);!ok{if er:=a.ConnectEdge(ctx,e);er!=nil{log.Printf("edge %s: %v",e.ID,er)}}};select{case<-ctx.Done():return;case<-time.After(cfg.SyncInterval)}}
+	var version bool
+	flag.StringVar(&path, "config", "client.json", "JSON configuration file")
+	flag.BoolVar(&version, "version", false, "print build version")
+	flag.Parse()
+	if version {
+		log.Print(buildinfo.String())
+		return
+	}
+	var cfg client.Config
+	if err := config.Read(path, &cfg); err != nil {
+		log.Fatal(err)
+	}
+	a, err := client.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer a.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if !a.Bound() {
+		br, err := a.Bind(ctx)
+		if err != nil {
+			log.Print(err)
+			return
+		}
+		log.Printf("Approve this device: %s  user code: %s", br.VerificationURI, br.UserCode)
+		log.Printf("Public key fingerprint: %s", a.PublicKeyFingerprint())
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for !a.Bound() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if time.Now().After(br.ExpiresAt) {
+				log.Print("binding expired; restart to request a new code")
+				return
+			}
+			polled, err := a.PollBind(ctx, br.ID, br.PollToken)
+			if err != nil {
+				log.Printf("binding: %v", err)
+				continue
+			}
+			if polled.Status == "expired" || polled.Status == "denied" {
+				log.Printf("binding %s", polled.Status)
+				return
+			}
+		}
+	}
+	interval := cfg.SyncInterval
+	if interval <= 0 {
+		interval = 20 * time.Second
+	}
+	// A failed edge cannot postpone cloud authorization renewal.
+	syncDone := make(chan struct{})
+	go func() {
+		defer close(syncDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			if _, err := a.Sync(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("cloud sync: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			a.Close()
+			<-syncDone
+			return
+		case <-ticker.C:
+		}
+		for _, edge := range a.Snapshot().Edges {
+			if err := a.ConnectEdge(ctx, edge); err != nil && ctx.Err() == nil {
+				log.Printf("edge %s: %v", edge.ID, err)
+			}
+		}
+	}
 }
-func current(a *client.Agent,id string)(bool,bool){return false,false}

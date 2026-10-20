@@ -1,96 +1,552 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, AppBar, Box, Button, Chip, CircularProgress, Container, CssBaseline, Dialog, DialogActions,
-  DialogContent, DialogTitle, Divider, Drawer, FormControl, IconButton, InputLabel, LinearProgress,
-  MenuItem, Paper, Select, Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, TextField, Toolbar, Tooltip, Typography, useMediaQuery,
-  ThemeProvider, createTheme, Checkbox, FormControlLabel,
-} from '@mui/material';
-import MenuIcon from '@mui/icons-material/Menu';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import DevicesIcon from '@mui/icons-material/Devices';
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import LanguageIcon from '@mui/icons-material/Language';
-import RouterIcon from '@mui/icons-material/Router';
-import SpeedIcon from '@mui/icons-material/Speed';
-import SecurityIcon from '@mui/icons-material/Security';
-import HistoryIcon from '@mui/icons-material/History';
-import SettingsIcon from '@mui/icons-material/Settings';
-import PeopleIcon from '@mui/icons-material/People';
-import LogoutIcon from '@mui/icons-material/Logout';
-import AddIcon from '@mui/icons-material/Add';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import EditIcon from '@mui/icons-material/Edit';
-import { errorMessage, mutate, queryClient, request, setCSRF } from './api';
-import type { ACLPolicy, ACLTemplate, Certificate, Device, Edge, List, Overview, Quota, Rule, Session, User } from './types';
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Collapse,
+  Container,
+  CssBaseline,
+  Drawer,
+  IconButton,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  MenuItem,
+  Paper,
+  Stack,
+  TextField,
+  Toolbar,
+  Typography,
+  useMediaQuery,
+  ThemeProvider,
+  createTheme,
+} from "@mui/material";
+import MenuIcon from "@mui/icons-material/Menu";
+import LogoutIcon from "@mui/icons-material/Logout";
+import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
+import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
+import DnsOutlinedIcon from "@mui/icons-material/DnsOutlined";
+import DataUsageOutlinedIcon from "@mui/icons-material/DataUsageOutlined";
+import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettingsOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import { APIError, errorMessage, queryClient, request, setCSRF } from "./api";
+import { SessionContext, useSessionEvents } from "./ui";
+import type { Session } from "./types";
+import AuthPage from "./pages/Auth";
 
-const teal = '#176b68';
-const theme = createTheme({ palette: { primary: { main: teal }, secondary: { main: '#a85c27' }, background: { default: '#f7f9f9' } }, shape: { borderRadius: 8 }, typography: { fontFamily: 'Inter, "Segoe UI", "Microsoft YaHei", sans-serif' }, components: { MuiButton: { defaultProps: { disableElevation: true } }, MuiPaper: { styleOverrides: { root: { backgroundImage: 'none' } } } } });
-const nav = [
-  { path: '/', label: '概览', icon: <DashboardIcon /> }, { path: '/devices', label: '设备', icon: <DevicesIcon /> },
-  { path: '/rules', label: 'TCP / UDP 隧道', icon: <SwapHorizIcon /> }, { path: '/sites', label: 'HTTP(S) 站点', icon: <LanguageIcon /> },
-  { path: '/certificates', label: '域名与证书', icon: <SecurityIcon /> }, { path: '/usage', label: '用量', icon: <SpeedIcon /> },
+const DevicesPage = lazy(() =>
+  import("./pages/Devices").then((m) => ({ default: m.DevicesPage })),
+);
+const DevicePage = lazy(() =>
+  import("./pages/Devices").then((m) => ({ default: m.DevicePage })),
+);
+const BindPage = lazy(() =>
+  import("./pages/Devices").then((m) => ({ default: m.BindPage })),
+);
+const RulesPage = lazy(() =>
+  import("./pages/Rules").then((m) => ({ default: m.RulesPage })),
+);
+const RulePage = lazy(() =>
+  import("./pages/Rules").then((m) => ({ default: m.RulePage })),
+);
+const CertificatesPage = lazy(() => import("./pages/Certificates"));
+const PortsPage = lazy(() => import("./pages/Ports"));
+const OverviewPage = lazy(() =>
+  import("./pages/Monitoring").then((m) => ({ default: m.OverviewPage })),
+);
+const UsagePage = lazy(() =>
+  import("./pages/Monitoring").then((m) => ({ default: m.UsagePage })),
+);
+const AuditPage = lazy(() =>
+  import("./pages/Monitoring").then((m) => ({ default: m.AuditPage })),
+);
+const UsersPage = lazy(() =>
+  import("./pages/Admin").then((m) => ({ default: m.UsersPage })),
+);
+const EdgesPage = lazy(() =>
+  import("./pages/Admin").then((m) => ({ default: m.EdgesPage })),
+);
+const QuotasPage = lazy(() =>
+  import("./pages/Admin").then((m) => ({ default: m.QuotasPage })),
+);
+const ACLPage = lazy(() => import("./pages/ACL"));
+
+declare const __BUILD_ID__: string;
+type NavLink = { path: string; label: string };
+type NavItem = {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  adminOnly?: boolean;
+} & (
+  | { path: string; children?: never }
+  | { path?: never; children: NavLink[] }
+);
+const nav: NavItem[] = [
+  { id: "overview", path: "/", label: "概览", icon: <DashboardOutlinedIcon /> },
+  {
+    id: "connections",
+    label: "连接管理",
+    icon: <HubOutlinedIcon />,
+    children: [
+      { path: "/devices", label: "设备" },
+      { path: "/rules", label: "TCP / UDP 隧道" },
+      { path: "/sites", label: "HTTP(S) 站点" },
+    ],
+  },
+  {
+    id: "resources",
+    label: "网络资源",
+    icon: <DnsOutlinedIcon />,
+    children: [
+      { path: "/ports", label: "公网端口" },
+      { path: "/certificates", label: "域名与证书" },
+    ],
+  },
+  {
+    id: "usage",
+    path: "/usage",
+    label: "用量",
+    icon: <DataUsageOutlinedIcon />,
+  },
+  {
+    id: "platform",
+    label: "平台管理",
+    icon: <AdminPanelSettingsOutlinedIcon />,
+    adminOnly: true,
+    children: [
+      { path: "/admin/overview", label: "平台概览" },
+      { path: "/admin/users", label: "用户与空间" },
+      { path: "/admin/edges", label: "边缘与端口池" },
+      { path: "/admin/quotas", label: "账号配额" },
+      { path: "/admin/acl", label: "TCP/UDP ACL 模板" },
+      { path: "/admin/audit", label: "审计与系统" },
+    ],
+  },
 ];
-const adminNav = [
-  { path: '/admin/overview', label: '平台概览', icon: <DashboardIcon /> }, { path: '/admin/users', label: '用户与空间', icon: <PeopleIcon /> },
-  { path: '/admin/edges', label: '边缘节点', icon: <RouterIcon /> }, { path: '/admin/quotas', label: '账号配额', icon: <SpeedIcon /> },
-  { path: '/admin/acl', label: 'TCP/UDP ACL 模板', icon: <SecurityIcon /> }, { path: '/admin/audit', label: '审计与系统', icon: <HistoryIcon /> },
-];
+function matchesNav(pathname: string, path: string) {
+  return pathname === path || (path !== "/" && pathname.startsWith(`${path}/`));
+}
+const loading = (
+  <Box role="status" aria-label="加载中" sx={{ p: 8, textAlign: "center" }}>
+    <CircularProgress />
+  </Box>
+);
 
-function useSession() { return useQuery<Session>({ queryKey: ['me'], queryFn: () => request<Session>('/me'), retry: false, staleTime: 60_000 }); }
-function useResource<T>(path: string, key: string, enabled = true) { return useQuery<List<T>>({ queryKey: [key, path], queryFn: () => request<List<T>>(path), enabled }); }
-function fmtBytes(n = 0) { if (!n) return '0 B'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1); return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; }
-function fmtDate(value?: string) { if (!value) return '—'; const d = new Date(value); return Number.isNaN(d.getTime()) ? value : d.toLocaleString('zh-CN'); }
-function Status({ value }: { value?: string | boolean }) { const text = typeof value === 'boolean' ? (value ? '已启用' : '已停用') : value || '未检查'; const good = ['ready', 'online', 'healthy', 'applied', 'active', '已启用', '运行中'].includes(String(value)); return <Chip size="small" label={text} color={good ? 'success' : String(value).includes('error') || value === false ? 'error' : 'default'} variant={good ? 'filled' : 'outlined'} />; }
-function Empty({ title, detail, action }: { title: string; detail?: string; action?: ReactNode }) { return <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', borderStyle: 'dashed' }}><Typography variant="h6">{title}</Typography>{detail && <Typography color="text.secondary" sx={{ mt: 1 }}>{detail}</Typography>}{action && <Box sx={{ mt: 2 }}>{action}</Box>}</Paper>; }
-function PageTitle({ title, detail, action }: { title: string; detail?: string; action?: ReactNode }) { return <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} spacing={1} sx={{ mb: 3 }}><Box><Typography variant="h4" component="h1" fontWeight={700}>{title}</Typography>{detail && <Typography color="text.secondary" sx={{ mt: .5 }}>{detail}</Typography>}</Box>{action}</Stack>; }
-function TableFrame({ children }: { children: ReactNode }) { return <TableContainer component={Paper} variant="outlined"><Table size="small" className="resource-table">{children}</Table></TableContainer>; }
-function Load({ loading, error, children }: { loading: boolean; error: unknown; children: ReactNode }) { if (loading) return <Box sx={{ py: 8, textAlign: 'center' }}><CircularProgress /></Box>; if (error) return <Alert severity="error" sx={{ mb: 2 }}>{errorMessage(error)}</Alert>; return <>{children}</>; }
-
-function Login() {
-  const [username, setUsername] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState('');
-  const login = useMutation({ mutationFn: () => request<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }), onSuccess: (s) => { setCSRF(s.csrf_token); queryClient.setQueryData(['me'], s); } });
-  const submit = (e: FormEvent) => { e.preventDefault(); setError(''); login.mutate(undefined, { onError: (err) => setError(errorMessage(err)) }); };
-  return <Box sx={{ minHeight: '100vh', bgcolor: '#eef6f5', display: 'grid', placeItems: 'center', p: 2 }}><Paper component="form" onSubmit={submit} elevation={2} sx={{ p: { xs: 3, sm: 5 }, width: '100%', maxWidth: 420 }}><Typography variant="h4" fontWeight={800} color={teal}>DraFRP</Typography><Typography color="text.secondary" sx={{ mt: .5, mb: 3 }}>隧道管理控制台</Typography>{error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}<Stack spacing={2}><TextField label="用户名" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required autoFocus /><TextField label="密码" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /><Button type="submit" variant="contained" size="large" disabled={login.isPending}>{login.isPending ? '登录中…' : '登录'}</Button></Stack></Paper></Box>;
+function Shell({
+  session,
+  themeMode,
+  onTheme,
+  children,
+}: {
+  session: Session;
+  themeMode: string;
+  onTheme: (mode: string) => void;
+  children: ReactNode;
+}) {
+  const loc = useLocation(),
+    small = useMediaQuery("(max-width:900px)");
+  const [open, setOpen] = useState(false);
+  const admin = ["admin", "platform_admin"].includes(session.user.role);
+  const items = nav.filter((item) => !item.adminOnly || admin);
+  const currentItem = items.find((item) =>
+    item.children
+      ? item.children.some(({ path }) => matchesNav(loc.pathname, path))
+      : matchesNav(loc.pathname, item.path),
+  );
+  const currentGroup = currentItem?.children ? currentItem.id : null;
+  const currentPage = currentItem?.children
+    ? currentItem.children.find(({ path }) => matchesNav(loc.pathname, path))
+        ?.label
+    : currentItem?.label;
+  const current = currentPage
+    ? [currentGroup && currentItem?.label, currentPage]
+        .filter(Boolean)
+        .join(" / ")
+    : "页面不存在";
+  const [expandedGroup, setExpandedGroup] = useState(currentGroup);
+  useEffect(() => {
+    setExpandedGroup(currentGroup);
+  }, [loc.pathname, currentGroup]);
+  const logout = useMutation({
+    mutationFn: () => request<void>("/auth/logout", { method: "POST" }),
+    onSuccess: () => {
+      setCSRF("");
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
+      queryClient.setQueryData(["me"], null);
+    },
+  });
+  const navLink = (item: NavLink, icon?: ReactNode) => {
+    const active = matchesNav(loc.pathname, item.path);
+    return (
+      <ListItem key={item.path} disablePadding>
+        <ListItemButton
+          component={Link}
+          to={item.path}
+          onClick={() => setOpen(false)}
+          selected={active}
+          aria-current={active ? "page" : undefined}
+          sx={{
+            pl: icon ? 2 : 6.5,
+            borderRadius: 1,
+            color: active ? "primary.main" : "text.secondary",
+            "& .MuiListItemText-primary": {
+              fontSize: 14,
+              fontWeight: active ? 700 : 400,
+            },
+          }}
+        >
+          {icon && (
+            <ListItemIcon sx={{ minWidth: 36, color: "inherit" }}>
+              {icon}
+            </ListItemIcon>
+          )}
+          <ListItemText primary={item.label} />
+        </ListItemButton>
+      </ListItem>
+    );
+  };
+  const drawer = (
+    <Box sx={{ width: 244, py: 1 }} component="nav" aria-label="控制台导航">
+      <Typography
+        sx={{ px: 3, py: 2 }}
+        variant="h6"
+        fontWeight={800}
+        color="primary"
+      >
+        DraFRP
+      </Typography>
+      <List disablePadding sx={{ px: 1 }}>
+        {items.map((item) => {
+          if (!item.children) return navLink(item, item.icon);
+          const expanded = expandedGroup === item.id;
+          const active = currentGroup === item.id;
+          return (
+            <Box component="li" key={item.id} sx={{ listStyle: "none" }}>
+              <ListItemButton
+                onClick={() => setExpandedGroup(expanded ? null : item.id)}
+                aria-expanded={expanded}
+                aria-controls={`nav-${item.id}`}
+                sx={{
+                  borderRadius: 1,
+                  color: active ? "primary.main" : "text.secondary",
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 36, color: "inherit" }}>
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.label}
+                  primaryTypographyProps={{
+                    fontSize: 14,
+                    fontWeight: active ? 700 : 500,
+                  }}
+                />
+                {expanded ? (
+                  <ExpandLessIcon fontSize="small" />
+                ) : (
+                  <ExpandMoreIcon fontSize="small" />
+                )}
+              </ListItemButton>
+              <Collapse in={expanded} timeout="auto" unmountOnExit>
+                <List
+                  id={`nav-${item.id}`}
+                  aria-label={item.label}
+                  disablePadding
+                >
+                  {item.children.map((child) => navLink(child))}
+                </List>
+              </Collapse>
+            </Box>
+          );
+        })}
+      </List>
+    </Box>
+  );
+  return (
+    <Box sx={{ minHeight: "100vh" }}>
+      <AppBar
+        position="fixed"
+        color="inherit"
+        elevation={0}
+        sx={{
+          borderBottom: 1,
+          borderColor: "divider",
+          zIndex: (t) => (small ? t.zIndex.appBar : t.zIndex.drawer + 1),
+        }}
+      >
+        <Toolbar>
+          {small && (
+            <IconButton
+              onClick={() => setOpen(!open)}
+              edge="start"
+              aria-label="打开导航"
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
+          <Typography
+            sx={{ flex: 1, minWidth: 0, mr: 1 }}
+            noWrap
+            title={`控制台 / ${current}`}
+            color="text.secondary"
+          >
+            控制台 / {current}
+          </Typography>
+          <TextField
+            select
+            size="small"
+            label="主题"
+            value={themeMode}
+            onChange={(e) => onTheme(e.target.value)}
+            sx={{ width: 100, mr: 1 }}
+          >
+            <MenuItem value="system">跟随系统</MenuItem>
+            <MenuItem value="light">浅色</MenuItem>
+            <MenuItem value="dark">深色</MenuItem>
+          </TextField>
+          <Typography sx={{ mx: 1, display: { xs: "none", sm: "block" } }}>
+            {session.user.username}
+          </Typography>
+          <IconButton
+            onClick={() => logout.mutate()}
+            disabled={logout.isPending}
+            aria-label="退出登录"
+          >
+            <LogoutIcon />
+          </IconButton>
+        </Toolbar>
+      </AppBar>
+      <Drawer
+        variant={small ? "temporary" : "permanent"}
+        open={!small || open}
+        onClose={() => setOpen(false)}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          "& .MuiDrawer-paper": {
+            top: small ? 0 : 64,
+            height: small ? "100%" : "calc(100% - 64px)",
+          },
+        }}
+      >
+        {drawer}
+      </Drawer>
+      <Box
+        component="main"
+        sx={{ ml: small ? 0 : "244px", pt: 10, px: { xs: 2, md: 4 }, pb: 6 }}
+      >
+        <Container maxWidth="xl">
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ mb: 2, overflowWrap: "anywhere" }}
+          >
+            <Chip size="small" label="当前空间" />
+            <Typography variant="body2" className="mono">
+              {session.user.tenant_id}
+            </Typography>
+          </Stack>
+          {logout.error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {errorMessage(logout.error)}
+            </Alert>
+          )}
+          {children}
+        </Container>
+      </Box>
+    </Box>
+  );
 }
 
-function Shell({ session, children }: { session: Session; children: ReactNode }) {
-  const loc = useLocation(); const navg = useNavigate(); const small = useMediaQuery('(max-width:900px)'); const [open, setOpen] = useState(!small);
-  const logout = useMutation({ mutationFn: () => request<void>('/auth/logout', { method: 'POST' }), onSettled: () => { queryClient.removeQueries(); navg('/'); } });
-  useEffect(() => { setOpen(!small); }, [small]);
-  useEffect(() => { const handler = () => queryClient.invalidateQueries(); window.addEventListener('drafrp-session-expired', handler); return () => window.removeEventListener('drafrp-session-expired', handler); }, []);
-  useEffect(() => { const es = new EventSource('/api/v1/events'); es.onmessage = () => queryClient.invalidateQueries(); return () => es.close(); }, []);
-  const items = session.user.role === 'admin' || session.user.role === 'platform_admin' ? [...nav, ...adminNav] : nav;
-  const drawer = <Box sx={{ width: 248, pt: 1 }} role="navigation"><Typography sx={{ px: 3, py: 2 }} variant="h6" fontWeight={800} color={teal}>DraFRP</Typography>{items.map(i => <Button key={i.path} component={Link} to={i.path} onClick={() => small && setOpen(false)} startIcon={i.icon} fullWidth sx={{ justifyContent: 'flex-start', px: 3, py: 1.2, borderRadius: 0, color: loc.pathname === i.path ? teal : 'text.secondary', bgcolor: loc.pathname === i.path ? '#e0f1ef' : 'transparent', fontWeight: loc.pathname === i.path ? 700 : 400 }}>{i.label}</Button>)}</Box>;
-  return <Box sx={{ minHeight: '100vh', bgcolor: '#f7f9f9' }}><AppBar position="fixed" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider', zIndex: theme => theme.zIndex.drawer + 1 }}><Toolbar><IconButton onClick={() => setOpen(!open)} edge="start" aria-label="打开导航"><MenuIcon /></IconButton><Typography sx={{ flex: 1, ml: 1 }} color="text.secondary">控制台 / {items.find(i => i.path === loc.pathname)?.label || '页面'}</Typography><Typography sx={{ mr: 2, display: { xs: 'none', sm: 'block' } }}>{session.user.username}</Typography><Tooltip title="退出"><IconButton onClick={() => logout.mutate()} aria-label="退出登录"><LogoutIcon /></IconButton></Tooltip></Toolbar></AppBar><Drawer variant={small ? 'temporary' : 'permanent'} open={open} onClose={() => setOpen(false)} ModalProps={{ keepMounted: true }} sx={{ '& .MuiDrawer-paper': { top: { xs: 0, sm: 64 }, height: { xs: '100%', sm: 'calc(100% - 64px)' }, boxSizing: 'border-box', borderRight: 1, borderColor: 'divider' } }}>{drawer}</Drawer><Box component="main" sx={{ ml: { sm: open ? '248px' : 0 }, pt: 10, px: { xs: 2, md: 4 }, pb: 6, transition: 'margin .2s' }}><Container maxWidth="xl">{children}</Container></Box></Box>;
+function Authenticated({
+  session,
+  themeMode,
+  onTheme,
+}: {
+  session: Session;
+  themeMode: string;
+  onTheme: (mode: string) => void;
+}) {
+  const events = useSessionEvents(
+    `${session.user.id}/${session.user.tenant_id}`,
+  );
+  const location = useLocation();
+  const admin = ["admin", "platform_admin"].includes(session.user.role);
+  const buildMismatch =
+    __BUILD_ID__ !== "development" &&
+    session.build_id &&
+    session.build_id !== __BUILD_ID__;
+  const notices = (
+    <>
+      {events === "disconnected" && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          状态事件连接已中断。当前显示最后快照，页面可见时将以 15–60
+          秒间隔重新读取。
+        </Alert>
+      )}
+      {buildMismatch && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" onClick={() => window.location.reload()}>
+              刷新版本
+            </Button>
+          }
+        >
+          服务已升级。请先处理未提交的表单，再刷新页面。页面 {__BUILD_ID__} /
+          服务 {session.build_id}
+        </Alert>
+      )}
+    </>
+  );
+  const content = (
+    <Suspense fallback={loading}>
+      <Routes>
+        <Route path="/" element={<OverviewPage />} />
+        <Route path="/devices" element={<DevicesPage />} />
+        <Route path="/devices/:id" element={<DevicePage />} />
+        <Route path="/rules" element={<RulesPage />} />
+        <Route path="/rules/:id" element={<RulePage />} />
+        <Route path="/ports" element={<PortsPage />} />
+        <Route path="/sites" element={<RulesPage sites />} />
+        <Route path="/sites/:id" element={<RulePage />} />
+        <Route path="/certificates" element={<CertificatesPage />} />
+        <Route path="/usage" element={<UsagePage />} />
+        {admin && (
+          <>
+            <Route path="/admin/overview" element={<OverviewPage platform />} />
+            <Route path="/admin/users" element={<UsersPage />} />
+            <Route path="/admin/edges" element={<EdgesPage />} />
+            <Route path="/admin/quotas" element={<QuotasPage />} />
+            <Route path="/admin/acl" element={<ACLPage />} />
+            <Route path="/admin/audit" element={<AuditPage />} />
+          </>
+        )}
+        <Route
+          path="*"
+          element={
+            <Paper variant="outlined" sx={{ p: 4 }}>
+              <Typography variant="h4" gutterBottom>
+                404 · 页面不存在
+              </Typography>
+              <Button component={Link} to="/">
+                返回概览
+              </Button>
+            </Paper>
+          }
+        />
+      </Routes>
+    </Suspense>
+  );
+  return (
+    <SessionContext.Provider value={session}>
+      {location.pathname.startsWith("/bind/") ? (
+        <Container maxWidth="sm" sx={{ py: 6 }}>
+          {notices}
+          <Suspense fallback={loading}>
+            <Routes>
+              <Route path="/bind/:code" element={<BindPage />} />
+            </Routes>
+          </Suspense>
+        </Container>
+      ) : (
+        <Shell session={session} themeMode={themeMode} onTheme={onTheme}>
+          {notices}
+          {content}
+        </Shell>
+      )}
+    </SessionContext.Provider>
+  );
 }
 
-function OverviewPage() { const q = useQuery<Overview>({ queryKey: ['overview'], queryFn: () => request('/overview') }); return <><PageTitle title="概览" detail="账号下所有设备、规则和边缘的实时状态" action={<IconButton onClick={() => q.refetch()} aria-label="刷新"><RefreshIcon /></IconButton>} /><Load loading={q.isLoading} error={q.error}>{q.data && <><Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 2, mb: 3 }}>{[['设备', `${q.data.online_devices} / ${q.data.devices}`, '在线 / 总数'], ['规则', `${q.data.ready_rules} / ${q.data.rules}`, '已就绪 / 总数'], ['边缘', q.data.edges, '已登记'], ['上传', fmtBytes(q.data.usage_upload_bytes), '累计业务流量'], ['下载', fmtBytes(q.data.usage_download_bytes), '累计业务流量']].map(([a,b,c]) => <Paper key={String(a)} variant="outlined" sx={{ p: 2.5 }}><Typography color="text.secondary">{a}</Typography><Typography variant="h5" fontWeight={700} sx={{ mt: 1 }}>{b}</Typography><Typography variant="caption" color="text.secondary">{c}</Typography></Paper>)}</Box><Alert severity="info">状态和用量以云控实际观测批次为准；“未检查”不会被显示为健康。</Alert></>}</Load></>; }
-
-function DevicesPage() { const q = useResource<Device>('/devices', 'devices'); const [bind, setBind] = useState(false); const [code, setCode] = useState(''); const [name, setName] = useState(''); const [msg, setMsg] = useState(''); const m = useMutation({ mutationFn: () => mutate('/bind/confirm', 'POST', { user_code: code, name }), onSuccess: () => { setBind(false); setCode(''); setName(''); setMsg('绑定请求已确认，设备会在下次同步时显示。'); queryClient.invalidateQueries({ queryKey: ['devices'] }); }, onError: e => setMsg(errorMessage(e)) }); const revoke = useMutation({ mutationFn: (id: string) => mutate(`/devices/${id}`, 'DELETE'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['devices'] }) }); return <><PageTitle title="设备" detail="每台 Agent 拥有独立身份、能力和会话" action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setBind(true)}>确认绑定</Button>} />{msg && <Alert onClose={() => setMsg('')} severity={msg.includes('失败') || msg.includes('错误') ? 'error' : 'success'} sx={{ mb: 2 }}>{msg}</Alert>}<Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="还没有绑定设备" detail="从 Agent 获取绑定码后，在此确认设备归属。" action={<Button onClick={() => setBind(true)} variant="outlined">确认绑定</Button>} /> : <TableFrame><TableHead><TableRow><TableCell>名称 / ID</TableCell><TableCell>会话</TableCell><TableCell>能力</TableCell><TableCell>最后心跳</TableCell><TableCell>应用修订</TableCell><TableCell /></TableRow></TableHead><TableBody>{q.data.items.map(d => <TableRow key={d.id}><TableCell><Typography fontWeight={600}>{d.name}</Typography><Typography className="mono" color="text.secondary">{d.id}</Typography></TableCell><TableCell><Status value={d.revoked ? 'revoked' : d.last_seen ? 'online' : 'offline'} /></TableCell><TableCell>{d.capabilities?.length ? d.capabilities.join('、') : '未上报'}</TableCell><TableCell>{fmtDate(d.last_seen)}</TableCell><TableCell>{d.applied_revision || '—'}</TableCell><TableCell align="right"><Button color="error" size="small" onClick={() => window.confirm(`撤销设备“${d.name}”？关联隧道将中断。`) && revoke.mutate(d.id)} startIcon={<DeleteOutlineIcon />}>撤销</Button></TableCell></TableRow>)}</TableBody></TableFrame>}</Load><Dialog open={bind} onClose={() => setBind(false)} fullWidth maxWidth="sm"><DialogTitle>确认设备绑定</DialogTitle><DialogContent><Typography color="text.secondary" sx={{ mb: 2 }}>Agent 只展示一次性用户码。浏览器不会领取或保存设备私钥。</Typography><Stack spacing={2} sx={{ mt: 1 }}><TextField label="用户码" value={code} onChange={e => setCode(e.target.value)} required autoFocus /><TextField label="设备名称（可选）" value={name} onChange={e => setName(e.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBind(false)}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={!code || m.isPending}>确认绑定</Button></DialogActions></Dialog></>; }
-
-function RuleForm({ initial, protocol, onClose }: { initial?: Rule; protocol: 'tcp' | 'udp' | 'http'; onClose: () => void }) { const [form, setForm] = useState({ name: initial?.name || '', device_id: initial?.device_id || '', edge_id: initial?.edge_id || '', public_port: initial?.public_port || 0, target: initial?.target || '', domain: initial?.domain || '', host: initial?.host || '', server_name: initial?.server_name || '', source_mode: initial?.source_mode || (protocol === 'http' ? 'forwarded_headers' : 'socket'), transport: initial?.transport || 'auto', enabled: initial?.enabled ?? true, timeout_seconds: initial?.timeout_seconds || 30 }); const devices = useResource<Device>('/devices', 'devices'); const edges = useResource<Edge>('/edges', 'edges'); const m = useMutation({ mutationFn: () => mutate<Rule>(initial ? `/rules/${initial.id}` : '/rules', initial ? 'PUT' : 'POST', { ...form, protocol }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['rules'] }); onClose(); }, }); const set = (key: string, value: unknown) => setForm(v => ({ ...v, [key]: value })); return <Dialog open onClose={onClose} fullWidth maxWidth="md"><DialogTitle>{initial ? '编辑' : '创建'}{protocol === 'http' ? ' HTTP(S) 站点' : ` ${protocol.toUpperCase()} 隧道`}</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><TextField label="名称" value={form.name} onChange={e => set('name', e.target.value)} required /><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><FormControl fullWidth required><InputLabel>目标设备</InputLabel><Select value={form.device_id} label="目标设备" onChange={e => set('device_id', e.target.value)}>{devices.data?.items.map(d => <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>)}</Select></FormControl><FormControl fullWidth required><InputLabel>边缘节点</InputLabel><Select value={form.edge_id} label="边缘节点" onChange={e => set('edge_id', e.target.value)}>{edges.data?.items.map(e => <MenuItem key={e.id} value={e.id}>{e.name}</MenuItem>)}</Select></FormControl></Stack>{protocol === 'http' ? <><TextField label="域名" value={form.domain} onChange={e => set('domain', e.target.value)} required placeholder="app.example.com" /><TextField label="回源目标 URL" value={form.target} onChange={e => set('target', e.target.value)} required placeholder="https://10.0.0.2:8443" /><TextField label="Host（可选）" value={form.host} onChange={e => set('host', e.target.value)} /><TextField label="SNI（可选）" value={form.server_name} onChange={e => set('server_name', e.target.value)} /></> : <><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><TextField type="number" label="公网端口（0=自动申请）" value={form.public_port} onChange={e => set('public_port', Number(e.target.value))} fullWidth /><TextField label="Agent 目标 host:port" value={form.target} onChange={e => set('target', e.target.value)} required fullWidth /></Stack><FormControl fullWidth><InputLabel>保源方式</InputLabel><Select value={form.source_mode} label="保源方式" onChange={e => set('source_mode', e.target.value)}><MenuItem value="socket">普通 socket</MenuItem><MenuItem value="native">原生保源（需 Agent 能力）</MenuItem></Select></FormControl></>}<FormControl fullWidth><InputLabel>传输</InputLabel><Select value={form.transport} label="传输" onChange={e => set('transport', e.target.value)}><MenuItem value="auto">自动（UDP/QUIC 优先）</MenuItem><MenuItem value="quic_only">仅 QUIC</MenuItem><MenuItem value="tls_only">仅 TLS</MenuItem></Select></FormControl>{protocol === 'http' && <Alert severity="info">HTTP 站点由 Agent 注入可信来源头；HTTP 页面不使用 TCP/UDP ACL。</Alert>}{m.error && <Alert severity="error">{errorMessage(m.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={onClose}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={m.isPending || !form.name || !form.device_id || !form.edge_id || !form.target}>{m.isPending ? '保存中…' : '保存并等待应用'}</Button></DialogActions></Dialog>; }
-
-function RulesPage({ protocol }: { protocol: 'tcp' | 'udp' | 'http' }) { const q = useResource<Rule>('/rules', 'rules'); const [editing, setEditing] = useState<Rule | undefined>(); const [add, setAdd] = useState(false); const [error, setError] = useState(''); const remove = useMutation({ mutationFn: (r: Rule) => mutate(`/rules/${r.id}`, 'DELETE'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rules'] }), onError: e => setError(errorMessage(e)) }); const rows = q.data?.items.filter(r => protocol === 'http' ? r.protocol === 'http' || r.protocol === 'https' : r.protocol === protocol) || []; const title = protocol === 'http' ? 'HTTP(S) 站点' : `${protocol.toUpperCase()} 隧道`; return <><PageTitle title={title} detail={protocol === 'http' ? '域名、TLS 与回源目标' : '公网入口 → 边缘 → Agent → 目标服务'} action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setAdd(true)}>创建</Button>} />{error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}<Load loading={q.isLoading} error={q.error}>{!rows.length ? <Empty title={`还没有 ${title}`} detail={protocol === 'http' ? '创建站点后，边缘将按域名路由并由 Agent 回源。' : '创建规则后，系统会显示真实的配置应用状态。'} action={<Button variant="outlined" startIcon={<AddIcon />} onClick={() => setAdd(true)}>创建</Button>} /> : <TableFrame><TableHead><TableRow><TableCell>名称 / 协议</TableCell><TableCell>入口</TableCell><TableCell>目标设备</TableCell><TableCell>状态</TableCell><TableCell>应用</TableCell><TableCell /></TableRow></TableHead><TableBody>{rows.map(r => <TableRow key={r.id}><TableCell><Typography fontWeight={600}>{r.name}</Typography><Typography variant="caption" color="text.secondary">{r.protocol.toUpperCase()} · {r.transport}</Typography></TableCell><TableCell>{r.domain || `:${r.public_port}`}<Typography className="mono" color="text.secondary">{r.edge_id}</Typography></TableCell><TableCell><Typography>{r.target}</Typography><Typography variant="caption" color="text.secondary">{r.device_id}</Typography></TableCell><TableCell><Status value={r.status} />{r.last_error && <Typography variant="caption" color="error" display="block">{r.last_error}</Typography>}</TableCell><TableCell>{r.applied_version}/{r.version}</TableCell><TableCell align="right"><IconButton aria-label={`编辑 ${r.name}`} onClick={() => setEditing(r)}><EditIcon /></IconButton><IconButton aria-label={`删除 ${r.name}`} color="error" onClick={() => window.confirm('删除后现有连接可能中断，端口将等待释放。') && remove.mutate(r)}><DeleteOutlineIcon /></IconButton></TableCell></TableRow>)}</TableBody></TableFrame>}</Load>{(add || editing) && <RuleForm protocol={protocol} initial={editing} onClose={() => { setAdd(false); setEditing(undefined); }} />}</>; }
-
-function CertificatesPage() { const q = useResource<Certificate>('/certificates', 'certificates'); const [open, setOpen] = useState(false); const [form, setForm] = useState({ name: '', domains: '', cert_pem: '', key_pem: '' }); const m = useMutation({ mutationFn: () => mutate('/certificates', 'POST', { ...form, domains: form.domains.split(/[\s,]+/).filter(Boolean) }), onSuccess: () => { setOpen(false); setForm({ name: '', domains: '', cert_pem: '', key_pem: '' }); queryClient.invalidateQueries({ queryKey: ['certificates'] }); } }); const del = useMutation({ mutationFn: (id: string) => mutate(`/certificates/${id}`, 'DELETE'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['certificates'] }) }); return <><PageTitle title="域名与证书" detail="私钥仅在上传时提交，后续查询不会回显" action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>上传证书</Button>} /><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="还没有证书" detail="为 HTTP(S) 站点上传公网证书和私钥。" /> : <TableFrame><TableHead><TableRow><TableCell>名称</TableCell><TableCell>域名</TableCell><TableCell>有效期</TableCell><TableCell /></TableRow></TableHead><TableBody>{q.data.items.map(c => <TableRow key={c.id}><TableCell>{c.name}</TableCell><TableCell>{c.domains.join('、')}</TableCell><TableCell>{fmtDate(c.expires_at)}</TableCell><TableCell align="right"><IconButton color="error" aria-label="删除证书" onClick={() => window.confirm('删除证书？关联站点可能无法应用。') && del.mutate(c.id)}><DeleteOutlineIcon /></IconButton></TableCell></TableRow>)}</TableBody></TableFrame>}</Load><Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md"><DialogTitle>上传公网证书</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><TextField label="名称" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /><TextField label="域名（空格或逗号分隔）" value={form.domains} onChange={e => setForm({ ...form, domains: e.target.value })} required /><TextField label="证书 PEM" multiline minRows={5} value={form.cert_pem} onChange={e => setForm({ ...form, cert_pem: e.target.value })} required /><TextField label="私钥 PEM（不会再次显示）" multiline minRows={5} value={form.key_pem} onChange={e => setForm({ ...form, key_pem: e.target.value })} required />{m.error && <Alert severity="error">{errorMessage(m.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={() => setOpen(false)}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={m.isPending || !form.name || !form.domains || !form.cert_pem || !form.key_pem}>上传</Button></DialogActions></Dialog></>; }
-
-function UsagePage() { const q = useQuery<{ items: Array<{ grant_id: string; tenant_id: string; edge_id: string; upload_bytes: number; download_bytes: number; sequence: number; closed: boolean; expires_at: string; reserved_bytes: number }>; total: number }>({ queryKey: ['usage'], queryFn: () => request('/usage') }); return <><PageTitle title="用量" detail="按云控统计批次展示；没有数据时不会补成零" action={<IconButton onClick={() => q.refetch()} aria-label="刷新"><RefreshIcon /></IconButton>} /><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="暂无用量统计" detail="待边缘上报首个统计批次后，这里会显示账号和边缘明细。" /> : <TableFrame><TableHead><TableRow><TableCell>授权 / 边缘</TableCell><TableCell>上传（访问者 → 目标）</TableCell><TableCell>下载（目标 → 访问者）</TableCell><TableCell>序号 / 观测状态</TableCell><TableCell>截止</TableCell></TableRow></TableHead><TableBody>{q.data.items.map(u => <TableRow key={`${u.grant_id}-${u.sequence}`}><TableCell><Typography className="mono">{u.grant_id}</Typography>{u.edge_id}</TableCell><TableCell>{fmtBytes(u.upload_bytes)}</TableCell><TableCell>{fmtBytes(u.download_bytes)}</TableCell><TableCell>{u.sequence} · <Status value={u.closed ? 'closed' : 'active'} /></TableCell><TableCell>{fmtDate(u.expires_at)}</TableCell></TableRow>)}</TableBody></TableFrame>}</Load></>; }
-
-function AdminOverview() { const [system, setSystem] = useState<any>(); const ov = useQuery<Overview>({ queryKey: ['admin-overview'], queryFn: () => request('/overview') }); const sy = useQuery<any>({ queryKey: ['system'], queryFn: () => request('/system') }); useEffect(() => { if (sy.data) setSystem(sy.data); }, [sy.data]); return <><PageTitle title="平台概览" detail="节点、配置应用和存储健康" /><Load loading={ov.isLoading || sy.isLoading} error={ov.error || sy.error}>{ov.data && <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 2, mb: 3 }}>{[['边缘', ov.data.edges], ['设备', ov.data.devices], ['规则', ov.data.rules], ['已就绪规则', ov.data.ready_rules]].map(([k,v]) => <Paper variant="outlined" sx={{ p: 2.5 }} key={String(k)}><Typography color="text.secondary">{k}</Typography><Typography variant="h4" sx={{ mt: 1 }}>{v}</Typography></Paper>)}</Box>}{system && <Paper variant="outlined" sx={{ p: 2.5 }}><Typography variant="h6" gutterBottom>系统状态</Typography><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><Status value={system.mysql} /><Typography>缓存后端：{system.cache?.backend || '未知'}</Typography><Typography>构建：{system.build_id || '未知'}</Typography><Typography>启动：{fmtDate(system.started_at)}</Typography></Stack></Paper>}</Load></>; }
-
-function UsersPage() { const q = useResource<User>('/users', 'users'); const [open, setOpen] = useState(false); const [f, setF] = useState({ username: '', password: '', role: 'user' }); const m = useMutation({ mutationFn: () => mutate('/users', 'POST', f), onSuccess: () => { setOpen(false); setF({ username: '', password: '', role: 'user' }); queryClient.invalidateQueries({ queryKey: ['users'] }); } }); return <><PageTitle title="用户与空间" detail="平台管理员管理用户、角色与自动创建的空间" action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>创建用户</Button>} /><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="暂无用户" /> : <TableFrame><TableHead><TableRow><TableCell>用户名</TableCell><TableCell>角色</TableCell><TableCell>空间</TableCell><TableCell>状态</TableCell></TableRow></TableHead><TableBody>{q.data.items.map(u => <TableRow key={u.id}><TableCell>{u.username}</TableCell><TableCell>{u.role}</TableCell><TableCell className="mono">{u.tenant_id}</TableCell><TableCell><Status value={u.disabled ? false : 'active'} /></TableCell></TableRow>)}</TableBody></TableFrame>}</Load><Dialog open={open} onClose={() => setOpen(false)}><DialogTitle>创建用户</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><TextField label="用户名" value={f.username} onChange={e => setF({ ...f, username: e.target.value })} /><TextField label="初始密码" type="password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} /><FormControl><InputLabel>角色</InputLabel><Select label="角色" value={f.role} onChange={e => setF({ ...f, role: e.target.value })}><MenuItem value="user">用户</MenuItem><MenuItem value="admin">平台管理员</MenuItem></Select></FormControl>{m.error && <Alert severity="error">{errorMessage(m.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={() => setOpen(false)}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={m.isPending || !f.username || !f.password}>创建</Button></DialogActions></Dialog></>; }
-
-function EdgesPage() { const q = useResource<Edge>('/edges', 'edges'); const [open, setOpen] = useState(false); const [f, setF] = useState({ name: '', public_host: '', listen_host: '', http_port: 80, https_port: 443, port_min: 10000, port_max: 20000, max_carriers: 64, capacity_bps: 0, token: '' }); const m = useMutation({ mutationFn: () => mutate('/edges', 'POST', { ...f, endpoints: [] }), onSuccess: () => { setOpen(false); queryClient.invalidateQueries({ queryKey: ['edges'] }); } }); return <><PageTitle title="边缘节点" detail="监听入口池与承载能力；令牌仅在创建时提交" action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>登记边缘</Button>} /><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="暂无边缘节点" detail="边缘服务启动后登记到云控，普通用户只能使用已授权节点。" /> : <TableFrame><TableHead><TableRow><TableCell>名称 / 公网主机</TableCell><TableCell>入口池</TableCell><TableCell>承载上限</TableCell><TableCell>最后观测</TableCell><TableCell>修订</TableCell></TableRow></TableHead><TableBody>{q.data.items.map(e => <TableRow key={e.id}><TableCell><Typography fontWeight={600}>{e.name}</Typography><Typography color="text.secondary">{e.public_host}</Typography></TableCell><TableCell>{e.port_min}–{e.port_max} · HTTP {e.http_port} / HTTPS {e.https_port}</TableCell><TableCell>{e.max_carriers} 承载 · {e.capacity_bps ? `${fmtBytes(e.capacity_bps)}/s` : '未设置'}</TableCell><TableCell>{fmtDate(e.last_seen)}</TableCell><TableCell>{e.applied_revision || '—'}</TableCell></TableRow>)}</TableBody></TableFrame>}</Load><Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm"><DialogTitle>登记边缘节点</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}>{(['name','public_host','listen_host','token'] as const).map(k => <TextField key={k} label={k === 'token' ? '边缘令牌' : k} type={k === 'token' ? 'password' : 'text'} value={f[k]} onChange={e => setF({ ...f, [k]: e.target.value })} required={k !== 'listen_host'} />)}<Alert severity="info">端口池用于业务入口和承载入口的服务端配置，实际占用以边缘同步确认结果为准。</Alert>{m.error && <Alert severity="error">{errorMessage(m.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={() => setOpen(false)}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={m.isPending || !f.name || !f.public_host || !f.token}>登记</Button></DialogActions></Dialog></>; }
-
-function QuotasPage() { const q = useResource<Quota>('/quotas', 'quotas'); const [editing, setEditing] = useState<Quota>(); const [f, setF] = useState<Partial<Quota>>({}); const m = useMutation({ mutationFn: () => mutate(`/quotas/${editing!.tenant_id}`, 'PUT', { ...f, version: editing!.version }), onSuccess: () => { setEditing(undefined); queryClient.invalidateQueries({ queryKey: ['quotas'] }); } }); return <><PageTitle title="账号配额" detail="弹性基准、突发信用与并发上限按账号共享" /><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="暂无配额" /> : <TableFrame><TableHead><TableRow><TableCell>租户</TableCell><TableCell>基准 / 峰值</TableCell><TableCell>突发信用</TableCell><TableCell>并发 / 新流</TableCell><TableCell>周期用量</TableCell><TableCell /></TableRow></TableHead><TableBody>{q.data.items.map(x => <TableRow key={x.tenant_id}><TableCell className="mono">{x.tenant_id}</TableCell><TableCell>{fmtBytes(x.base_bps)}/s · {fmtBytes(x.peak_bps)}/s</TableCell><TableCell>{fmtBytes(x.burst_bytes)}</TableCell><TableCell>{x.max_connections} · {x.new_flows_per_second}/s</TableCell><TableCell>{fmtBytes(x.used_bytes)} / {fmtBytes(x.period_bytes)}</TableCell><TableCell><Button size="small" onClick={() => { setEditing(x); setF(x); }}>编辑</Button></TableCell></TableRow>)}</TableBody></TableFrame>}</Load>{editing && <Dialog open onClose={() => setEditing(undefined)}><DialogTitle>编辑账号配额</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}>{(['base_bps','peak_bps','burst_bytes','max_connections','new_flows_per_second','period_bytes'] as const).map(k => <TextField key={k} type="number" label={k} value={f[k] ?? ''} onChange={e => setF({ ...f, [k]: Number(e.target.value) })} />)}{m.error && <Alert severity="error">{errorMessage(m.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={() => setEditing(undefined)}>取消</Button><Button variant="contained" onClick={() => m.mutate()} disabled={m.isPending}>保存</Button></DialogActions></Dialog>}</>; }
-
-function ACLPage() { const q = useResource<ACLTemplate>('/acl-templates', 'acl'); const [open, setOpen] = useState(false); const [editing, setEditing] = useState<ACLTemplate>(); const [f, setF] = useState({ name: '', default_action: 'deny', entries: '[]', default: false, mandatory: false }); const reset = () => { setOpen(false); setEditing(undefined); setF({ name: '', default_action: 'deny', entries: '[]', default: false, mandatory: false }); }; const create = useMutation({ mutationFn: () => mutate('/acl-templates', 'POST', { name: f.name, policy: { default_action: f.default_action, entries: [] }, default: f.default, mandatory: f.mandatory }), onSuccess: () => { reset(); queryClient.invalidateQueries({ queryKey: ['acl'] }); } }); const save = useMutation({ mutationFn: () => { let entries: unknown; try { entries = JSON.parse(f.entries); } catch { throw new Error('规则条目必须是合法 JSON 数组'); } if (!Array.isArray(entries)) throw new Error('规则条目必须是 JSON 数组'); return mutate(`/acl-templates/${editing!.id}`, 'PUT', { id: editing!.id, name: f.name, version: editing!.version, policy: { default_action: f.default_action, entries }, default: f.default, mandatory: f.mandatory }); }, onSuccess: () => { reset(); queryClient.invalidateQueries({ queryKey: ['acl'] }); } }); const publish = useMutation({ mutationFn: (x: ACLTemplate) => mutate(`/acl-templates/${x.id}/publish`, 'POST'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['acl'] }) }); const remove = useMutation({ mutationFn: (x: ACLTemplate) => mutate(`/acl-templates/${x.id}`, 'DELETE'), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['acl'] }) }); const beginEdit = (x: ACLTemplate) => { setEditing(x); setF({ name: x.name, default_action: x.policy.default_action, entries: JSON.stringify(x.policy.entries, null, 2), default: x.default, mandatory: x.mandatory }); setOpen(true); }; return <><PageTitle title="TCP/UDP ACL 模板" detail="初始为空；地区清单、CIDR 和动作由管理员自行添加" action={<Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>创建空模板</Button>} /><Alert severity="info" sx={{ mb: 2 }}>HTTP(S) 站点不使用 ACL 模板。父级强制策略由服务端与规则策略取交集。</Alert><Load loading={q.isLoading} error={q.error}>{!q.data?.items.length ? <Empty title="暂无 ACL 模板" detail="系统不会预置封国内、封海外或其他规则。" action={<Button variant="outlined" onClick={() => setOpen(true)}>创建空模板</Button>} /> : <TableFrame><TableHead><TableRow><TableCell>名称</TableCell><TableCell>草稿默认动作</TableCell><TableCell>发布版本</TableCell><TableCell>默认 / 强制</TableCell><TableCell /></TableRow></TableHead><TableBody>{q.data.items.map(x => <TableRow key={x.id}><TableCell>{x.name}</TableCell><TableCell>{x.policy.default_action} · {x.policy.entries.length} 条</TableCell><TableCell>{x.published ? `v${x.published.version}` : '未发布'}</TableCell><TableCell>{x.default ? '默认 ' : ''}{x.mandatory ? '强制' : ''}</TableCell><TableCell align="right"><Button size="small" startIcon={<EditIcon />} onClick={() => beginEdit(x)}>编辑</Button><Button size="small" onClick={() => publish.mutate(x)} disabled={!x.policy.entries.length && x.policy.default_action === 'deny'}>发布</Button><IconButton color="error" aria-label="删除模板" onClick={() => window.confirm('删除 ACL 模板？') && remove.mutate(x)}><DeleteOutlineIcon /></IconButton></TableCell></TableRow>)}</TableBody></TableFrame>}</Load><Dialog open={open} onClose={reset} fullWidth maxWidth="md"><DialogTitle>{editing ? '编辑' : '创建空'} ACL 模板</DialogTitle><DialogContent><Stack spacing={2} sx={{ mt: 1 }}><TextField label="模板名称" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} required /><FormControl><InputLabel>默认动作</InputLabel><Select label="默认动作" value={f.default_action} onChange={e => setF({ ...f, default_action: e.target.value })}><MenuItem value="deny">deny</MenuItem><MenuItem value="allow">allow</MenuItem></Select></FormControl>{editing && <TextField label="规则条目 JSON 数组" value={f.entries} onChange={e => setF({ ...f, entries: e.target.value })} multiline minRows={8} helperText="每项可包含 id、priority、action、cidrs、protocol、ports；服务端会再次校验。" />}{editing && <Stack direction="row"><FormControlLabel control={<Checkbox checked={f.default} onChange={e => setF({ ...f, default: e.target.checked })} />} label="设为默认模板" /><FormControlLabel control={<Checkbox checked={f.mandatory} onChange={e => setF({ ...f, mandatory: e.target.checked })} />} label="强制父策略" /></Stack>}<Typography variant="body2" color="text.secondary">不会自动加入任何 CIDR、地区或端口。</Typography>{(create.error || save.error) && <Alert severity="error">{errorMessage(create.error || save.error)}</Alert>}</Stack></DialogContent><DialogActions><Button onClick={reset}>取消</Button><Button variant="contained" onClick={() => editing ? save.mutate() : create.mutate()} disabled={!f.name || create.isPending || save.isPending}>{editing ? '保存草稿' : '创建'}</Button></DialogActions></Dialog></>; }
-
-function AuditPage() { const audit = useResource<any>('/audit', 'audit'); const system = useQuery<any>({ queryKey: ['system'], queryFn: () => request('/system') }); return <><PageTitle title="审计与系统" detail="配置变更、授权操作及当前运行时后端" /><Typography variant="h6" sx={{ mb: 1 }}>系统状态</Typography>{system.data && <Paper variant="outlined" sx={{ p: 2, mb: 3 }}><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><Status value={system.data.mysql} /><Typography>缓存：{system.data.cache?.backend}</Typography><Typography>命中 {system.data.cache?.hits ?? '—'} / 淘汰 {system.data.cache?.evictions ?? '—'}</Typography><Typography>构建：{system.data.build_id}</Typography></Stack></Paper>}<Typography variant="h6" sx={{ mb: 1 }}>操作审计</Typography><Load loading={audit.isLoading} error={audit.error}>{!audit.data?.items.length ? <Empty title="暂无审计记录" /> : <TableFrame><TableHead><TableRow><TableCell>时间</TableCell><TableCell>操作者</TableCell><TableCell>动作</TableCell><TableCell>资源</TableCell></TableRow></TableHead><TableBody>{audit.data.items.map((x: any) => <TableRow key={x.id}><TableCell>{fmtDate(x.created_at)}</TableCell><TableCell>{x.actor}</TableCell><TableCell>{x.action}</TableCell><TableCell className="mono">{x.resource_id}</TableCell></TableRow>)}</TableBody></TableFrame>}</Load></>; }
-
-function App() { const session = useSession(); useEffect(() => { if (session.data?.csrf_token) setCSRF(session.data.csrf_token); }, [session.data]); const content = session.isPending ? <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box> : session.isError || !session.data ? <Login /> : (() => { const admin = session.data.user.role === 'admin' || session.data.user.role === 'platform_admin'; return <Shell session={session.data}><Routes><Route path="/" element={<OverviewPage />} /><Route path="/devices" element={<DevicesPage />} /><Route path="/rules" element={<RulesPage protocol="tcp" />} /><Route path="/sites" element={<RulesPage protocol="http" />} /><Route path="/certificates" element={<CertificatesPage />} /><Route path="/usage" element={<UsagePage />} />{admin && <><Route path="/admin/overview" element={<AdminOverview />} /><Route path="/admin/users" element={<UsersPage />} /><Route path="/admin/edges" element={<EdgesPage />} /><Route path="/admin/quotas" element={<QuotasPage />} /><Route path="/admin/acl" element={<ACLPage />} /><Route path="/admin/audit" element={<AuditPage />} /></>}<Route path="*" element={<Navigate to="/" replace />} /></Routes></Shell>; })(); return <ThemeProvider theme={theme}><CssBaseline />{content}</ThemeProvider>; }
-export default App;
+export default function App() {
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const [mode, setMode] = useState(
+    () => localStorage.getItem("drafrp-theme") || "system",
+  );
+  const theme = useMemo(
+    () =>
+      createTheme({
+        palette: {
+          mode:
+            mode === "dark" || (mode === "system" && systemDark)
+              ? "dark"
+              : "light",
+          primary: { main: "#258781" },
+        },
+        shape: { borderRadius: 8 },
+        typography: { fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif' },
+        components: {
+          MuiButton: { defaultProps: { disableElevation: true } },
+          MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
+        },
+      }),
+    [mode, systemDark],
+  );
+  const session = useQuery<Session | null>({
+    queryKey: ["me"],
+    queryFn: ({ signal }) => request<Session>("/me", { signal }),
+    retry: false,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    setCSRF(session.data?.csrf_token || "");
+  }, [session.data]);
+  useEffect(() => {
+    const expired = () => {
+      setCSRF("");
+      void queryClient.cancelQueries();
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
+      queryClient.setQueryData(["me"], null);
+    };
+    window.addEventListener("drafrp-session-expired", expired);
+    return () => window.removeEventListener("drafrp-session-expired", expired);
+  }, []);
+  const content = session.isPending ? (
+    loading
+  ) : session.error &&
+    !(session.error instanceof APIError && session.error.status === 401) ? (
+    <Container maxWidth="sm" sx={{ py: 8 }}>
+      <Alert severity="error">
+        无法读取登录状态：{errorMessage(session.error)}
+      </Alert>
+      <Button sx={{ mt: 2 }} onClick={() => session.refetch()}>
+        重新连接
+      </Button>
+    </Container>
+  ) : !session.data ? (
+    <AuthPage />
+  ) : (
+    <Authenticated
+      session={session.data}
+      themeMode={mode}
+      onTheme={(m) => {
+        setMode(m);
+        localStorage.setItem("drafrp-theme", m);
+      }}
+    />
+  );
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      {content}
+    </ThemeProvider>
+  );
+}

@@ -1,0 +1,122 @@
+{
+  "status": "passed",
+  "scope": "dedicated Hyper-V Ubuntu VM only",
+  "source": "<redacted test workspace>/docker-acceptance-20261021/navigation-final-source",
+  "expected_build_id": "0.1.0-preview+3d76fc7",
+  "requested_targets": [
+    "cloud"
+  ],
+  "started_at": "2026-10-20T18:11:25Z",
+  "source_digest_before": {
+    "sha256": "c7d2b0e87e1f1daf7a1d8172c9ed4749a62216eeb1e21ad512fb60daa4b4d55f",
+    "files": 128
+  },
+  "targets": {
+    "cloud": {
+      "image": "drafrp-qa-cloud:acceptance-20261021",
+      "build_exit_code": 0,
+      "build_seconds": 14.204,
+      "image_id": "sha256:c5bcf5dab35bff653c7e1399cb3d0ac53893d17436e68749a6b121f23ba9846b",
+      "configured_user": "drafrp",
+      "entrypoint": [
+        "drafrp-cloud"
+      ],
+      "platform": "linux/amd64",
+      "runtime_uid": 10001,
+      "version_output": "2026/10/20 18:11:40 DraFRP 0.1.0-preview (3d76fc7; linux/amd64)",
+      "status": "passed"
+    }
+  },
+  "cloud_runtime": {
+    "container": "drafrp-docker-qa-f0638091aa01",
+    "container_id": "06cf4980eed31ff7558dd3f31a3939b908c5939ab36500d28adeddb87f3f6012",
+    "status": "passed",
+    "ready_status": 204,
+    "console_status": 200,
+    "console_index_sha256": "e05729280d9f10da4d185e0dad61cc0cf5ebe818089bebd266a6ec8da056da63",
+    "console_entry_assets": [
+      {
+        "path": "/console/assets/index-CU-rQljD.js",
+        "bytes": 23771,
+        "sha256": "a2918304ec921f1c3b305069765e3981656ec620346b4fc806c560170abab93c"
+      }
+    ],
+    "spa_deep_route": true,
+    "backend_build_id": "0.1.0-preview+3d76fc7",
+    "embedded_build_id_matches": true,
+    "fixture_captcha_explicitly_disabled": true,
+    "running_nonroot_readonly_no_capabilities": true,
+    "served_navigation_labels": [
+      "连接管理",
+      "网络资源",
+      "平台管理"
+    ],
+    "owned_container_removed": true,
+    "credentials_removed": true,
+    "owned_database_dropped": true
+  },
+  "source_digest_after": {
+    "sha256": "c7d2b0e87e1f1daf7a1d8172c9ed4749a62216eeb1e21ad512fb60daa4b4d55f",
+    "files": 128
+  },
+  "completed_at": "2026-10-20T18:11:42Z",
+  "source_base_archive": {
+    "path": "<redacted test workspace>/validation-20261021/source.tgz",
+    "sha256": "ac603ec8d1c49af9cba543862bbb14fc057f8fda57740de6ee2754df80007565"
+  },
+  "source_overlay": {
+    "synchronized_files": [
+      "web/src/App.tsx"
+    ],
+    "web/src/App.tsx_sha256": "cc5d8a555a2d8d503708ae874e703e35dd5d83e022254b33dd021337aa937070",
+    "observed_differences_from_base_archive": [
+      {
+        "path": "internal/systemtest/renewal_admission_test.go",
+        "archive_sha256": "2cb5e8fbbf53b73c79ca49f9ebea22664db02577a9bc40895c4d979539defe62",
+        "current_sha256": "4021ae70fc591fa84aa64f43d3dc874fb78f854dc191f80fe4938d55ce773cd1"
+      },
+      {
+        "path": "internal/systemtest/system_test.go",
+        "archive_sha256": "257f7d24e4e54775b451e17be92d16cb0a43ed5f00c256defcf37335dad903ed",
+        "current_sha256": "bebac6f6f594d7848285129af757d310fb44e3c577e15443a8028cd678f4df06"
+      },
+      {
+        "path": "web/src/App.tsx",
+        "archive_sha256": "36dc847faf4dea76c06ee10da29a84352b796e23bc935f49d0f74deea1bca2f2",
+        "current_sha256": "cc5d8a555a2d8d503708ae874e703e35dd5d83e022254b33dd021337aa937070"
+      }
+    ],
+    "additional_difference_is_go_test_source": true
+  },
+  "source_freeze": {
+    "copied_from": "<redacted test workspace>/validation-20261021/source",
+    "owned_stable_snapshot": true,
+    "previous_attempt_detected_external_test_source_change": true
+  },
+  "previous_five_target_evidence": {
+    "path": "<redacted test workspace>/docker-acceptance-20261021/docker-acceptance.json",
+    "sha256": "825de34dc36ae3a606a6d9be6a3ee715cbd0b7ae8861114c59c9884e386ee28b",
+    "preserved": true
+  },
+  "previous_navigation_evidence": {
+    "path": "<redacted test workspace>/docker-acceptance-20261021/navigation-results/docker-cloud-navigation.json",
+    "sha256": "10db32bf0ec31fbf6a82d9be572dca281ac477f5cd4e266d9466df7f82f3be48",
+    "preserved": true
+  },
+  "source_mobile_drawer_zindex_condition_verified": true,
+  "previous_console_entry_assets": [
+    {
+      "path": "/console/assets/index-CeoRpVz8.js",
+      "bytes": 23753,
+      "sha256": "54df1f8d5434459bc89d584e9ee10726070885423c2a77f5dacf432561e740a0"
+    }
+  ],
+  "console_entry_assets_changed": true,
+  "docker_backend_base": "golang:1.26.10-alpine",
+  "go_mod_toolchain": "go1.26.10",
+  "cleanup_verified": {
+    "owned_cloud_containers": 0,
+    "owned_qa_databases": 0,
+    "private_config_removed": true
+  }
+}
