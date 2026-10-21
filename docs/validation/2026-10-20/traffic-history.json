@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "branch": "codex/traffic-history",
+  "base_commit": "495f351",
+  "collection": "Bounded edge memory, UTC minute counters, existing periodic sync, transactional MySQL history",
+  "retention_days": 30,
+  "minimum_interval_seconds": 60,
+  "maximum_points": 1440,
+  "go": {
+    "full_suite": "go test -race ./... -count=1 -timeout=12m",
+    "full_suite_real_mysql": true,
+    "full_suite_result": "passed before final console presentation changes and the additional node-filter test",
+    "cloud_seconds": 641.713,
+    "systemtest_seconds": 236.747,
+    "final_focused_suite": "go test -race ./internal/cloud -run 'Test(MySQLTraffic|ParseTraffic)' -count=1 -timeout=2m",
+    "final_focused_seconds": 51.556,
+    "final_focused_result": "passed with real MySQL",
+    "vet": "go vet ./... passed",
+    "redis_specific_validation": "not run; this feature does not use Redis"
+  },
+  "accounting": {
+    "replayed_report_does_not_double_count": true,
+    "absolute_minute_increments": true,
+    "invalid_report_rolls_back_cumulative_usage": true,
+    "ack_preserves_current_minute_and_concurrent_writes": true,
+    "bounded_minutes_do_not_drop_cumulative_accounting": true,
+    "old_node_receipt_time_fallback_is_labelled": true,
+    "repeat_migration_preserves_history_and_start": true,
+    "real_quic_tls_tcp_udp_https_history_matches_payload_totals": true,
+    "real_multi_edge_history_matches_payload_totals": true,
+    "bit_per_second_and_partial_interval_denominators": true,
+    "tenant_node_filter_and_platform_node_filter": true,
+    "guessed_node_does_not_expose_another_tenant": true
+  },
+  "frontend": {
+    "unit_tests": 14,
+    "unit_tests_result": "passed",
+    "typecheck": "passed",
+    "format_check": "passed",
+    "production_build": "passed"
+  },
+  "browser": {
+    "engine": "Playwright Chromium",
+    "backend": "Windows release cloud with embedded production frontend and isolated real MySQL",
+    "chart_data": "Artificial minute samples submitted through the real runtime API; browser curves do not prove real network throughput",
+    "user_console": "/console/usage",
+    "admin_console": "/console/admin/usage",
+    "separate_navigation_and_switch_entry": true,
+    "platform_overview_does_not_show_personal_pending_services": true,
+    "default_all_nodes_is_one_aggregate_curve": true,
+    "selected_node_is_one_curve_and_filters_cumulative_table": true,
+    "selected_node_checked": "Singapore test edge, 22.7 MiB cumulative instead of 47.3 MiB all nodes",
+    "explicit_one_minute_interval": true,
+    "thirty_day_range_resets_one_minute_interval_to_auto": true,
+    "custom_range_and_invalid_range_message": true,
+    "custom_range_does_not_claim_automatic_refresh": true,
+    "flow_bandwidth_switch": true,
+    "snapped_point_breakdown": true,
+    "pin_survives_pointer_movement_and_refetch": true,
+    "live_window_refetch_preserves_selected_timestamp": true,
+    "escape_releases_pin_even_after_refresh_button_has_focus": true,
+    "keyboard_missing_and_recorded_point_details": true,
+    "mobile_touch_context": {
+      "viewport": [390, 844],
+      "has_touch": true,
+      "tap_pins_details": true,
+      "document_width": 390,
+      "page_horizontal_overflow": false,
+      "chart_and_table_scroll_inside_their_containers": true
+    },
+    "ordinary_user": {
+      "admin_entry_absent": true,
+      "own_empty_history_does_not_show_admin_seed_data": true,
+      "direct_admin_route_shows_permission_error": true,
+      "platform_history_status": 403,
+      "platform_summary_status": 403
+    },
+    "expected_browser_errors": "403 responses from explicit ordinary-user permission probes; temporary connection errors while restarting the owned QA service",
+    "desktop_screenshot": "output/playwright/traffic-desktop.png",
+    "mobile_screenshot": "output/playwright/traffic-mobile.png",
+    "screenshots_visually_reviewed": true
+  },
+  "cleanup": {
+    "owned_browser_closed": true,
+    "owned_cloud_stopped": true,
+    "owned_mysql_database_dropped": true,
+    "owned_credentials_and_cookie_state_removed": true
+  },
+  "limits": [
+    "Cloud must be upgraded before edges because older strict JSON decoders reject the minutes field",
+    "Minute history begins with collection; earlier cumulative usage cannot reconstruct historical minutes",
+    "Bandwidth is interval-average business payload bit/s, not an instantaneous or physical interface peak",
+    "Unreported in-memory counters are not durable across an abnormal edge process exit"
+  ]
+}

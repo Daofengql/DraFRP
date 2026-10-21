@@ -319,3 +319,28 @@ export interface List<T> {
   items: T[];
   total: number;
 }
+
+export interface TrafficPoint {
+  start: string;
+  end: string;
+  upload_bytes: number;
+  download_bytes: number;
+  upload_bps: number;
+  download_bps: number;
+  samples: number;
+  receipt_bytes: number;
+}
+
+export interface TrafficHistory {
+  scope: "tenant" | "platform";
+  edge_id?: string;
+  start: string;
+  end: string;
+  interval_seconds: number;
+  available_from: string;
+  observed_at: string;
+  upload_bytes: number;
+  download_bytes: number;
+  receipt_bytes: number;
+  points: TrafficPoint[];
+}

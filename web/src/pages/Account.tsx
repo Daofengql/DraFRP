@@ -26,11 +26,12 @@ import {
 } from "../ui";
 import type { Account, Edge } from "../types";
 
-export function useAccount() {
+export function useAccount(enabled = true) {
   const { user } = useSessionContext();
   return useQuery<Account>({
     queryKey: ["account", user.id, user.tenant_id],
     queryFn: ({ signal }) => request("/account", { signal }),
+    enabled,
   });
 }
 

@@ -4,7 +4,7 @@
 
 ## 通用约定
 
-- JSON 使用 snake_case，错误形如 `{"error":{"code":"version_conflict","message":"…"}}`。列表返回 `{"items":[],"total":0}`；当前不支持游标分页，用量与审计最多返回最近 1000 条。
+- JSON 使用 snake_case，错误形如 `{"error":{"code":"version_conflict","message":"…"}}`。列表返回 `{"items":[],"total":0}`；原始 `/usage` 用量与审计最多返回最近 1000 条，汇总与时间序列使用各自约定。
 - 浏览器使用 HttpOnly、SameSite=Lax cookie 登录。已认证写操作要求 `X-CSRF-Token` 并检查 Origin；token 来自登录或 `/me`。登录和公开注册检查 Origin，不要求预先登录或 CSRF token。前端不把凭据写入 localStorage。
 - 浏览器写操作可带最多 128 字节的 `Idempotency-Key`。同一账号、key、方法、路径和原始正文重放已提交结果；key 用于另一请求返回 409。业务写入、审计、revision 和幂等响应在一个 MySQL 事务提交。
 - 规则、ACL 草稿和套餐编辑提交当前 `version`；冲突返回 409。出口节点编辑当前没有 version 字段；存在规则时拒绝改变其监听配置。
@@ -52,7 +52,8 @@
 | GET/POST `/plans` | 管理员列出/创建套餐；包含节点、基础与突发带宽、端口/网站数、流量及超额策略、default |
 | PUT/DELETE `/plans/{id}` | 管理员按 version 编辑；更新所有已分配空间，已分配或默认套餐不可删除 |
 | PUT `/users/{id}/plan` | 管理员 `{plan_id,version}` 分配套餐，version 为当前空间权限版本；空 plan_id 取消分配 |
-| GET `/usage-summary` | 当前空间按出口节点聚合完整累计上传/下载与最近上报时间，不受 /usage 的 1000 条上限影响 |
+| GET `/usage-summary` | 当前空间按出口节点聚合完整累计上传/下载与最近上报时间，不受 /usage 的 1000 条上限影响；管理员可带 `scope=platform` |
+| GET `/usage-history` | 流量历史折线图；按分钟采集，默认最近 24 小时，支持 `start`/`end`、`interval=auto|1m|5m|1h|1d`、`edge_id`；管理员可带 `scope=platform` 查看全平台 |
 | GET `/usage` | 当前空间按 grant 的累计字节快照；记录是累计值，不可逐行求和 |
 | GET `/audit` | 管理员读取近期审计 |
 | GET `/system` | MySQL、临时缓存后端与统计、版本、启动时间 |
@@ -63,6 +64,20 @@
 `GET/HEAD /healthz` 返回 204；`GET/HEAD /readyz` 实际探测 MySQL，失败返回 503。`/console/` 为嵌入 SPA，缺失静态资产返回 404，不回退成 HTML。
 
 注册和图形验证码默认开启。云控 `registration_disabled: true` 关闭公开注册，管理员创建用户仍可用；`captcha_disabled: true` 显式关闭登录与注册验证码校验，此时可省略两个验证码字段，发图接口返回 404。验证码为六位字符、不区分大小写，TTL 两分钟，一次尝试即消费（含错误答案或正确答案但错误密码），刷新、重启后须重新获取。无效/过期/重复答案返回 400 `captcha_invalid`；重复用户名返回 409 `username_exists`；关闭注册返回 403 `registration_disabled`。注册用户名 trim 后 1–64 个 Unicode 字符且最多 255 字节，密码 10–72 UTF-8 字节；不接受 role、tenant_id 等额外字段。账号、空间、默认套餐权限与审计在同一事务内提交。每来源 IP 每分钟发图最多 30 次、登录 20 次、注册 10 次，超限返回 429。验证码仅保存在有界进程内存，数据库不保存答案。
+
+## 流量与带宽历史
+
+用户控制台 `/console/usage` 固定读取当前空间；独立管理员控制台 `/console/admin/usage` 读取全平台。管理员通过专用入口切换两套导航；用户侧没有平台统计切换。后端两个统计接口默认 `scope=tenant`，仅管理员可请求 `scope=platform`，普通用户请求返回 403。空间身份来自登录会话，不接受 `tenant_id` 覆盖。
+
+`GET /usage-history` 的 `start`、`end` 必须同时提供，使用 RFC3339；省略时取最近 24 小时。开始向下、结束向上按 UTC 分钟对齐，区间为 `[start,end)`。仅接受最近 30 天，结束不能超过当前分钟末，每次最多 1440 个点。`interval` 可为 `auto`（默认）、`1m`、`5m`、`1h`、`1d`；auto 在不超过 6 小时、2 天、14 天和更长范围分别使用 1 分钟、5 分钟、1 小时和 1 天。重复参数、未知参数、无效或超限范围返回 400 `invalid_time_range`。
+
+省略 `edge_id` 汇总范围内全部节点，指定后只返回该节点的当前授权统计范围。猜测其他空间使用的节点 ID 不扩大数据权限。图表默认只有全部节点的汇总曲线；选择一个节点后只显示该节点。流量和带宽曲线均合计上传与下载，吸附详情提供两个方向明细，支持鼠标点击、触摸和键盘固定。
+
+响应包含 `scope,edge_id?,start,end,interval_seconds,available_from,observed_at,upload_bytes,download_bytes,receipt_bytes,points`。每点含 `start,end,upload_bytes,download_bytes,upload_bps,download_bps,samples,receipt_bytes`。`samples>0` 表示收到报告，真实零流量仍有样本；`samples=0` 的区间保留为缺失，图表断线。`samples` 是报告数，不是用户或独立分钟数。带宽单位 bit/s，由区间 byte × 8 ÷ 秒数计算；当前未结束区间使用已经过的秒数。它是业务载荷的区间平均值，最高区间平均带宽不是瞬时峰值，也不是物理网卡速率。
+
+出口节点按 grant 在内存中保存最多 63 个有流量的 UTC 分钟，并附加当前分钟零值样本，单次最多 64 分钟，随既有同步统一上报 `Usage.minutes=[{start,upload_bytes,download_bytes}]`。分钟计数是该 grant 在该分钟内的绝对累计值；云控与累计用量在同一事务校验和落库，重复/乱序报告不重复计量。确认后清理已结束且未被并发写入改变的分钟，当前分钟持续累加。进程异常退出不保证恢复尚未上报的内存记录。
+
+旧节点或内存窗口溢出的剩余累计差额按收到报告的分钟记录，`receipt_bytes` 显式标注这一部分。记录自首次升级起采集，不能重建此前的分钟曲线；后台分批清理 30 天前记录。升级时先云控、再出口节点：新云控兼容不带 minutes 的旧节点，旧云控严格 JSON 会拒绝新节点的 minutes 字段。本功能不依赖 Redis。
 
 ## 套餐与资源授权
 

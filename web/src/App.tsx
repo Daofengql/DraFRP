@@ -67,9 +67,7 @@ const PortsPage = lazy(() => import("./pages/Ports"));
 const OverviewPage = lazy(() =>
   import("./pages/Monitoring").then((m) => ({ default: m.OverviewPage })),
 );
-const UsagePage = lazy(() =>
-  import("./pages/Monitoring").then((m) => ({ default: m.UsagePage })),
-);
+const UsagePage = lazy(() => import("./pages/Usage"));
 const AuditPage = lazy(() =>
   import("./pages/Monitoring").then((m) => ({ default: m.AuditPage })),
 );
@@ -89,7 +87,6 @@ type NavItem = {
   id: string;
   label: string;
   icon: ReactNode;
-  adminOnly?: boolean;
 } & (
   | { path: string; children?: never }
   | { path?: never; children: NavLink[] }
@@ -125,23 +122,53 @@ const nav: NavItem[] = [
     label: "我的账户",
     children: [
       { path: "/account", label: "账户与套餐" },
-      { path: "/usage", label: "流量用量" },
+      { path: "/usage", label: "流量统计" },
     ],
     icon: <DataUsageOutlinedIcon />,
   },
+];
+const adminNav: NavItem[] = [
   {
     id: "platform",
-    label: "平台管理",
+    path: "/admin/overview",
+    label: "平台概览",
+    icon: <DashboardOutlinedIcon />,
+  },
+  {
+    id: "traffic",
+    path: "/admin/usage",
+    label: "全平台流量",
+    icon: <DataUsageOutlinedIcon />,
+  },
+  {
+    id: "users",
+    path: "/admin/users",
+    label: "用户管理",
     icon: <AdminPanelSettingsOutlinedIcon />,
-    adminOnly: true,
-    children: [
-      { path: "/admin/overview", label: "平台概览" },
-      { path: "/admin/users", label: "用户管理" },
-      { path: "/admin/edges", label: "出口节点与端口池" },
-      { path: "/admin/plans", label: "套餐管理" },
-      { path: "/admin/acl", label: "TCP/UDP ACL 模板" },
-      { path: "/admin/audit", label: "审计与系统" },
-    ],
+  },
+  {
+    id: "edges",
+    path: "/admin/edges",
+    label: "出口节点与端口池",
+    icon: <DnsOutlinedIcon />,
+  },
+  {
+    id: "plans",
+    path: "/admin/plans",
+    label: "套餐管理",
+    icon: <DataUsageOutlinedIcon />,
+  },
+  {
+    id: "acl",
+    path: "/admin/acl",
+    label: "TCP/UDP ACL 模板",
+    icon: <HubOutlinedIcon />,
+  },
+  {
+    id: "audit",
+    path: "/admin/audit",
+    label: "审计与系统",
+    icon: <AdminPanelSettingsOutlinedIcon />,
   },
 ];
 function matchesNav(pathname: string, path: string) {
@@ -167,8 +194,11 @@ function Shell({
   const loc = useLocation(),
     small = useMediaQuery("(max-width:900px)");
   const [open, setOpen] = useState(false);
-  const admin = ["admin", "platform_admin"].includes(session.user.role);
-  const items = nav.filter((item) => !item.adminOnly || admin);
+  const admin = session.user.role === "admin";
+  const adminArea =
+    admin && (loc.pathname === "/admin" || loc.pathname.startsWith("/admin/"));
+  const consoleName = adminArea ? "管理员控制台" : "用户控制台";
+  const items = adminArea ? adminNav : nav;
   const currentItem = items.find((item) =>
     item.children
       ? item.children.some(({ path }) => matchesNav(loc.pathname, path))
@@ -227,7 +257,11 @@ function Shell({
     );
   };
   const drawer = (
-    <Box sx={{ width: 220, py: 1 }} component="nav" aria-label="控制台导航">
+    <Box
+      sx={{ width: 220, py: 1 }}
+      component="nav"
+      aria-label={`${consoleName}导航`}
+    >
       <Typography
         sx={{ px: 3, py: 2 }}
         variant="h6"
@@ -236,6 +270,22 @@ function Shell({
       >
         DraFRP
       </Typography>
+      <Typography variant="body2" sx={{ px: 3, mb: 1 }} color="text.secondary">
+        {consoleName}
+      </Typography>
+      {admin && (
+        <Box sx={{ px: 2, mb: 1.5 }}>
+          <Button
+            fullWidth
+            variant="outlined"
+            component={Link}
+            to={adminArea ? "/" : "/admin/overview"}
+            onClick={() => setOpen(false)}
+          >
+            {adminArea ? "返回用户控制台" : "进入管理员控制台"}
+          </Button>
+        </Box>
+      )}
       <List disablePadding sx={{ px: 1 }}>
         {items.map((item) => {
           if (!item.children) return navLink(item, item.icon);
@@ -308,10 +358,10 @@ function Shell({
           <Typography
             sx={{ flex: 1, minWidth: 0, mr: 1 }}
             noWrap
-            title={`控制台 / ${current}`}
+            title={`${consoleName} / ${current}`}
             color="text.secondary"
           >
-            控制台 / {current}
+            {consoleName} / {current}
           </Typography>
           <TextField
             select
@@ -381,7 +431,7 @@ function Authenticated({
     `${session.user.id}/${session.user.tenant_id}`,
   );
   const location = useLocation();
-  const admin = ["admin", "platform_admin"].includes(session.user.role);
+  const admin = session.user.role === "admin";
   const buildMismatch =
     __BUILD_ID__ !== "development" &&
     session.build_id &&
@@ -421,11 +471,19 @@ function Authenticated({
         <Route path="/sites" element={<RulesPage sites />} />
         <Route path="/sites/:id" element={<RulePage />} />
         <Route path="/certificates" element={<CertificatesPage />} />
-        <Route path="/usage" element={<UsagePage />} />
+        <Route path="/usage" element={<UsagePage key="tenant" />} />
         <Route path="/account" element={<AccountPage />} />
         {admin && (
           <>
+            <Route
+              path="/admin"
+              element={<Navigate to="/admin/overview" replace />}
+            />
             <Route path="/admin/overview" element={<OverviewPage platform />} />
+            <Route
+              path="/admin/usage"
+              element={<UsagePage key="platform" platform />}
+            />
             <Route path="/admin/users" element={<UsersPage />} />
             <Route path="/admin/edges" element={<EdgesPage />} />
             <Route path="/admin/plans" element={<PlansPage />} />
@@ -436,6 +494,14 @@ function Authenticated({
             <Route path="/admin/acl" element={<ACLPage />} />
             <Route path="/admin/audit" element={<AuditPage />} />
           </>
+        )}
+        {!admin && (
+          <Route
+            path="/admin/*"
+            element={
+              <Alert severity="error">需要管理员权限才能访问管理员控制台</Alert>
+            }
+          />
         )}
         <Route
           path="*"

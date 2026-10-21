@@ -124,5 +124,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := migratePlans(ctx, db); err != nil {
 		return err
 	}
-	return migrateACLObservations(ctx, db)
+	if err := migrateACLObservations(ctx, db); err != nil {
+		return err
+	}
+	return migrateTraffic(ctx, db)
 }

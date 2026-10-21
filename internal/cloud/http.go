@@ -58,6 +58,7 @@ func (s *Server) routes() http.Handler {
 	m.HandleFunc("/api/v1/quotas/", s.authAdmin(s.quota))
 	m.HandleFunc("/api/v1/usage", s.auth(s.usage))
 	m.HandleFunc("/api/v1/usage-summary", s.auth(s.usageSummary))
+	m.HandleFunc("/api/v1/usage-history", s.auth(s.usageHistory))
 	m.HandleFunc("/api/v1/audit", s.authAdmin(s.auditAPI))
 	m.HandleFunc("/api/v1/system", s.auth(s.system))
 	m.HandleFunc("/api/v1/users", s.authAdmin(s.users))

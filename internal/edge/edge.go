@@ -266,6 +266,9 @@ func (r *Runtime) Sync(ctx context.Context) error {
 	r.mu.Lock()
 	r.acknowledgeACLLocked(req.ACL)
 	for _, u := range req.Usage {
+		if b := r.history[u.GrantID]; b != nil {
+			b.acknowledgeMinutes(u)
+		}
 		if u.Closed {
 			if b := r.history[u.GrantID]; b != nil && b.isSettled(u) {
 				delete(r.history, u.GrantID)

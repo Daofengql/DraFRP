@@ -325,6 +325,20 @@ func TestFullSystem(t *testing.T) {
 			if err = s.DB().QueryRow("SELECT COALESCE(SUM(upload_bytes+download_bytes),0) FROM usage_table WHERE tenant_id=?", b.user.TenantID).Scan(&usage); err != nil || usage < int64(len(payload)*4) {
 				t.Fatalf("durable usage=%d err=%v", usage, err)
 			}
+			var history model.TrafficHistory
+			b.api("GET", "/api/v1/usage-history?interval=1m", nil, &history, 200)
+			if history.UploadBytes+history.DownloadBytes != usage || history.ReceiptBytes != 0 {
+				t.Fatalf("real %s payload did not reach minute history: %+v; usage=%d", transport, history, usage)
+			}
+			var observed bool
+			for _, point := range history.Points {
+				if point.UploadBytes+point.DownloadBytes > 0 {
+					observed = point.Samples > 0 && point.UploadBPS+point.DownloadBPS > 0
+				}
+			}
+			if !observed {
+				t.Fatal("real payload has no bandwidth observation")
+			}
 			// Two independently bound devices must draw from the same account cap.
 			// A UDP socket close is not signalled over the network: its edge
 			// mapping still consumes concurrency until the idle timeout. Finish
