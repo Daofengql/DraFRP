@@ -9,6 +9,10 @@ import (
 )
 
 func (s *Server) user(w http.ResponseWriter, r *http.Request) {
+	if uid, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/users/"), "/plan"); ok {
+		s.assignUserPlan(w, r, uid)
+		return
+	}
 	if !requireMethod(w, r, "PATCH") {
 		return
 	}

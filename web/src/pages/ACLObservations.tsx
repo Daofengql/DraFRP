@@ -122,7 +122,7 @@ function ApplicationEvidence({ value }: { value: Application }) {
         {value.stale ? " · 反馈已过期" : ""}
       </Alert>
       <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-        期望规则 v{value.rule_version} · 边缘 {value.edge_name} · 启动标识{" "}
+        期望规则 v{value.rule_version} · 出口节点 {value.edge_name} · 启动标识{" "}
         {value.boot_id || "尚未启动"}
       </Typography>
       {value.ack ? (
@@ -140,7 +140,7 @@ function ApplicationEvidence({ value }: { value: Application }) {
           {value.ack.error && <Alert severity="error">{value.ack.error}</Alert>}
         </>
       ) : (
-        <Typography variant="body2">暂无边缘应用反馈</Typography>
+        <Typography variant="body2">暂无出口节点应用反馈</Typography>
       )}
     </Stack>
   );
@@ -178,13 +178,13 @@ function ObservationDialog({
                 <ApplicationEvidence value={q.data.application} />
                 <Typography variant="body2" color="text.secondary">
                   保留 {q.data.retention_days}{" "}
-                  天，按边缘启动、规则版本和策略分组。
+                  天，按出口节点启动、规则版本和策略分组。
                 </Typography>
                 {Object.entries(q.data.collection_loss).some(
                   ([, n]) => n > 0,
                 ) && (
                   <Alert severity="warning">
-                    采集容量已满，部分统计缺失。边缘丢弃{" "}
+                    采集容量已满，部分统计缺失。出口节点丢弃{" "}
                     {q.data.collection_loss.edge_dropped || 0} 次写入，云控丢弃{" "}
                     {q.data.collection_loss.cloud_dropped || 0} 条记录。
                   </Alert>

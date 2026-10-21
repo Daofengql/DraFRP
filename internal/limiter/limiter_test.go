@@ -100,3 +100,33 @@ func TestAvailableByteAccountingAndPartialQuantum(t *testing.T) {
 		t.Fatal("negative byte request accepted")
 	}
 }
+
+func TestBurstFallsBackToBaseAndCannotRenewCredit(t *testing.T) {
+	g := model.Grant{BaseBPS: 8000, PeakBPS: 16000, BurstBytes: 1000, ExpiresAt: time.Now().Add(time.Minute)}
+	b := New(g)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	start := time.Now()
+	if !b.WaitContext(ctx, 2000) {
+		t.Fatal("initial burst failed")
+	}
+	burstDuration := time.Since(start)
+	if burstDuration < 850*time.Millisecond {
+		t.Fatal("burst exceeded peak", burstDuration)
+	}
+	// Renewing the same authority must not refill its depleted burst bucket.
+	b.Update(g)
+	start = time.Now()
+	if !b.WaitContext(ctx, 1000) {
+		t.Fatal("base progress after burst failed")
+	}
+	if elapsed := time.Since(start); elapsed < 850*time.Millisecond {
+		t.Fatal("renewal or peak bypassed sustainable base", elapsed)
+	}
+	g.PeakBPS, g.BurstBytes = g.BaseBPS, 0
+	b = New(g)
+	start = time.Now()
+	if !b.WaitContext(ctx, 500) || time.Since(start) < 440*time.Millisecond {
+		t.Fatal("disabled burst exceeded base bandwidth")
+	}
+}

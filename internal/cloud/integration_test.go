@@ -77,6 +77,12 @@ func newCloudFixture(t *testing.T) *cloudFixture {
 	})
 	f := &cloudFixture{s: s, t: t, h: s.Handler()}
 	f.admin = f.login("admin", "a-strong-test-password")
+	// Existing transport/accounting tests exercise the pre-package policy API.
+	// Keep their fixture on a migrated package; package tests assign new plans.
+	p := decodeResponse[model.Plan](t, f.request("POST", "/api/v1/plans", model.Plan{Name: "Legacy test package", BandwidthBPS: -1, MaxPorts: -1, MaxSites: -1, AllEdges: true, Default: true}, f.admin, nil), 201)
+	if _, err := s.db.Exec("UPDATE plans SET legacy=1 WHERE id=?", p.ID); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 func (f *cloudFixture) request(method, path string, body any, b *browser, headers map[string]string) *httptest.ResponseRecorder {

@@ -10,11 +10,14 @@ const APIVersion = "v1"
 const ProtocolVersion = 1
 
 type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	TenantID string `json:"tenant_id"`
-	Disabled bool   `json:"disabled"`
+	ID        string    `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"`
+	TenantID  string    `json:"tenant_id"`
+	Disabled  bool      `json:"disabled"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	PlanID    string    `json:"plan_id,omitempty"`
+	PlanName  string    `json:"plan_name,omitempty"`
 }
 type Device struct {
 	ID              string         `json:"id"`
@@ -130,6 +133,7 @@ type Edge struct {
 	Runtime         *EdgeRuntime `json:"runtime,omitempty"`
 }
 type Rule struct {
+	PlanRestricted bool       `json:"plan_restricted,omitempty"`
 	ID             string     `json:"id"`
 	TenantID       string     `json:"tenant_id"`
 	Name           string     `json:"name"`
@@ -192,6 +196,9 @@ type Certificate struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 type Quota struct {
+	PlanID            string         `json:"plan_id"`
+	AllowedEdgeIDs    []string       `json:"allowed_edge_ids"`
+	MaxSites          int            `json:"max_sites"`
 	TenantID          string         `json:"tenant_id"`
 	BaseBPS           int64          `json:"base_bps"`
 	PeakBPS           int64          `json:"peak_bps"`
@@ -204,6 +211,8 @@ type Quota struct {
 	MaxDomains        int            `json:"max_domains"`
 	Resources         *ResourceUsage `json:"resources,omitempty"`
 	PeriodBytes       int64          `json:"period_bytes"`
+	OverageAction     string         `json:"overage_action"`
+	OverageBPS        int64          `json:"overage_bps"`
 	UsedBytes         int64          `json:"used_bytes"`
 	ReservedBytes     int64          `json:"reserved_bytes"`
 	Version           uint64         `json:"version"`
@@ -213,6 +222,7 @@ type Quota struct {
 	PeriodEndsAt      time.Time      `json:"period_ends_at"`
 }
 type Grant struct {
+	WaitForCredit     bool      `json:"wait_for_credit,omitempty"`
 	ID                string    `json:"id"`
 	TenantID          string    `json:"tenant_id"`
 	EdgeID            string    `json:"edge_id"`

@@ -82,6 +82,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, 503, "database_unavailable", "could not initialize account quota")
 		return
 	}
+	if err = initializeAccountPlan(r.Context(), tx, u.TenantID, nil); err != nil {
+		apiErr(w, 503, "database_unavailable", "could not initialize account plan")
+		return
+	}
 	if _, err = tx.ExecContext(r.Context(), "INSERT INTO audit(id,actor_id,tenant_id,action,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)", id(), u.ID, u.TenantID, "user.register", "user", u.ID, now()); err != nil {
 		apiErr(w, 503, "database_unavailable", "could not record registration")
 		return

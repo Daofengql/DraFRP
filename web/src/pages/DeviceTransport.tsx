@@ -14,8 +14,8 @@ import { carrierQualitySummary, milliseconds } from "../carrierQuality";
 import type { CarrierQualityRuntime, Device } from "../types";
 
 const errors: Record<string, string> = {
-  authorization_rejected: "设备授权被拒绝",
-  tls_identity_failed: "边缘证书校验失败",
+  authorization_rejected: "客户端授权被拒绝",
+  tls_identity_failed: "出口节点证书校验失败",
   path_timeout: "连接超时",
   connection_failed: "连接失败",
   race_not_selected: "本次选用其他路径",
@@ -81,7 +81,7 @@ export default function DeviceTransport({ device }: { device: Device }) {
     Date.parse(runtime.snapshot_expires_at) > Date.now();
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Agent 传输观测</Typography>
+      <Typography variant="h6">客户端 传输观测</Typography>
       {!current && (
         <Alert severity="warning">传输数据已失效，显示最近一次记录。</Alert>
       )}
@@ -90,7 +90,7 @@ export default function DeviceTransport({ device }: { device: Device }) {
       )}
       <Paper variant="outlined" sx={{ p: 3 }}>
         <div className="detail-grid">
-          <DetailField label="Agent 采样时间">
+          <DetailField label="客户端 采样时间">
             {fmtDate(runtime.reported_at)}
           </DetailField>
           <DetailField label="云控接收时间">
@@ -112,13 +112,13 @@ export default function DeviceTransport({ device }: { device: Device }) {
       <Typography variant="subtitle1">采样时已建立的承载</Typography>
       {!runtime.carriers?.length ? (
         <Typography color="text.secondary">
-          采样时没有已建立的边缘承载。
+          采样时没有已建立的出口节点承载。
         </Typography>
       ) : (
         <TableFrame>
           <TableHead>
             <TableRow>
-              <TableCell>边缘 / 端点</TableCell>
+              <TableCell>出口节点 / 端点</TableCell>
               <TableCell>传输</TableCell>
               <TableCell>活动流</TableCell>
               <TableCell>握手耗时</TableCell>
@@ -174,7 +174,7 @@ export default function DeviceTransport({ device }: { device: Device }) {
         <TableFrame>
           <TableHead>
             <TableRow>
-              <TableCell>边缘 / 端点</TableCell>
+              <TableCell>出口节点 / 端点</TableCell>
               <TableCell>状态 / 连续失败</TableCell>
               <TableCell>最近尝试 / 成功</TableCell>
               <TableCell>成功握手耗时</TableCell>

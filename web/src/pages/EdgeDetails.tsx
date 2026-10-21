@@ -51,7 +51,7 @@ export default function EdgeDetails({
             </Box>
           </Paper>
           {!runtime ? (
-            <Empty title="暂无边缘运行数据" />
+            <Empty title="暂无出口节点运行数据" />
           ) : (
             <>
               {(!fresh || !authorized) && (
@@ -149,7 +149,7 @@ export default function EdgeDetails({
                   。地区匹配规则停止转发。
                 </Alert>
               )}
-              <Typography variant="h6">Agent 承载端点</Typography>
+              <Typography variant="h6">客户端 承载端点</Typography>
               {!runtime.endpoints?.length ? (
                 <Empty title="暂无端点数据" />
               ) : (

@@ -43,10 +43,24 @@ func (s *Server) queryRules(ctx context.Context, filter string, args ...any) ([]
 	return out, rows.Err()
 }
 func (s *Server) listRules(r *http.Request, tid, rid string) ([]model.Rule, error) {
+	var items []model.Rule
+	var err error
 	if rid != "" {
-		return s.queryRules(r.Context(), " WHERE tenant_id=? AND id=?", tid, rid)
+		items, err = s.queryRules(r.Context(), " WHERE tenant_id=? AND id=?", tid, rid)
+	} else {
+		items, err = s.queryRules(r.Context(), " WHERE tenant_id=? ORDER BY created_at DESC", tid)
 	}
-	return s.queryRules(r.Context(), " WHERE tenant_id=? ORDER BY created_at DESC", tid)
+	if err != nil {
+		return nil, err
+	}
+	q, err := readQuota(r.Context(), s.store(r.Context()), tid, false)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].PlanRestricted = !edgeAllowed(q, items[i].EdgeID)
+	}
+	return items, nil
 }
 func (s *Server) devices(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, "GET") {
@@ -368,6 +382,10 @@ func (s *Server) rule(w http.ResponseWriter, r *http.Request) {
 		in.Status = "pending"
 		in.LastError = ""
 		if e := s.persistRule(r, &in, &old); e != nil {
+			if errors.Is(e, errVersion) {
+				apiErr(w, 409, "version_conflict", "服务配置已变更")
+				return
+			}
 			if writeResourceQuotaError(w, e) {
 				return
 			}
@@ -393,6 +411,21 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 		return e
 	}
 	defer tx.Rollback()
+	// Serialize resource mutations for an edge, including endpoint changes.
+	var raw string
+	var edge model.Edge
+	if e = tx.QueryRowContext(r.Context(), "SELECT id,endpoints,http_port,https_port,port_min,port_max FROM edges WHERE id=? FOR UPDATE", in.EdgeID).Scan(&edge.ID, &raw, &edge.HTTPPort, &edge.HTTPSPort, &edge.PortMin, &edge.PortMax); e != nil {
+		return errors.New("出口节点不存在")
+	}
+	decodeJSON(raw, &edge.Endpoints)
+	q, e := readQuota(r.Context(), tx, in.TenantID, true)
+	if e != nil {
+		return &resourceCapacityUnavailable{e}
+	}
+	if !edgeAllowed(q, in.EdgeID) && (old == nil || in.Enabled || old.EdgeID != in.EdgeID) {
+		return errors.New("套餐未包含该出口节点")
+	}
+	in.PlanRestricted = !edgeAllowed(q, in.EdgeID)
 	if old != nil {
 		var version uint64
 		var deleting bool
@@ -400,13 +433,6 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 			return errVersion
 		}
 	}
-	// Serialize resource mutations for an edge, including endpoint changes.
-	var raw string
-	var edge model.Edge
-	if e = tx.QueryRowContext(r.Context(), "SELECT id,endpoints,http_port,https_port,port_min,port_max FROM edges WHERE id=? FOR UPDATE", in.EdgeID).Scan(&edge.ID, &raw, &edge.HTTPPort, &edge.HTTPSPort, &edge.PortMin, &edge.PortMax); e != nil {
-		return errors.New("edge not found")
-	}
-	decodeJSON(raw, &edge.Endpoints)
 	if in.Transport != "auto" {
 		required := "tls"
 		if in.Transport == "quic_only" {
@@ -419,7 +445,7 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 			}
 		}
 		if !available {
-			return errors.New("capability_missing: edge has no endpoint for the required transport")
+			return errors.New("capability_missing: 出口节点不支持所选传输协议")
 		}
 	}
 	var n int
@@ -427,7 +453,7 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 	var capabilities string
 	var leaseUntil sql.NullTime
 	if e = tx.QueryRowContext(r.Context(), "SELECT id,capabilities,lease_until FROM devices WHERE id=? AND tenant_id=? AND revoked=0 FOR SHARE", in.DeviceID, in.TenantID).Scan(&deviceID, &capabilities, &leaseUntil); e != nil {
-		return errors.New("device not found in this tenant")
+		return errors.New("当前空间没有该客户端")
 	}
 	if in.SourceMode == "native" {
 		var caps []string
@@ -444,20 +470,20 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 	if isSite {
 		var owned string
 		if e = tx.QueryRowContext(r.Context(), "SELECT d.id FROM domains d JOIN domain_ownership o ON o.domain=d.domain AND o.tenant_id=d.tenant_id WHERE d.tenant_id=? AND d.domain=? AND d.status='verified' FOR SHARE", in.TenantID, in.Domain).Scan(&owned); e != nil {
-			return errors.New("domain_unverified: verify domain ownership before publishing a site")
+			return errors.New("domain_unverified: 域名未通过归属验证")
 		}
 		in.PublicPort = edge.HTTPPort
 		if in.Protocol == "https" {
 			in.PublicPort = edge.HTTPSPort
 		}
 		if in.PublicPort < 1 {
-			return errors.New("edge has no matching HTTP(S) listener")
+			return errors.New("出口节点未配置对应的 HTTP(S) 监听端口")
 		}
 		if in.Protocol == "https" {
 			var certPEM string
 			var exp time.Time
 			if e = tx.QueryRowContext(r.Context(), "SELECT cert_pem,expires_at FROM certificates WHERE id=? AND tenant_id=? FOR SHARE", in.CertificateID, in.TenantID).Scan(&certPEM, &exp); e != nil {
-				return errors.New("certificate not found in this tenant")
+				return errors.New("当前空间没有该证书")
 			}
 			if e = verifyCertificateDomain(certPEM, in.Domain); e != nil {
 				return e
@@ -489,11 +515,11 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 				}
 			}
 			if in.PublicPort == 0 {
-				return errors.New("edge business port pool is exhausted")
+				return errors.New("出口节点业务端口已用完")
 			}
 		}
 		if in.PublicPort < edge.PortMin || in.PublicPort > edge.PortMax {
-			return errors.New("port is outside the edge business pool")
+			return errors.New("端口不在出口节点业务端口范围内")
 		}
 		if in.Protocol == "tcp" && (in.PublicPort == edge.HTTPPort || in.PublicPort == edge.HTTPSPort) {
 			return errors.New("port is occupied by HTTP(S)")
@@ -502,7 +528,7 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 			_, p, _ := net.SplitHostPort(ep.Address)
 			port, _ := strconv.Atoi(p)
 			if port == in.PublicPort && ((ep.Transport == "tls" && in.Protocol == "tcp") || (ep.Transport == "quic" && in.Protocol == "udp")) {
-				return errors.New("port is occupied by a carrier endpoint")
+				return errors.New("端口已用于节点连接")
 			}
 		}
 		if in.ACLTemplateID == "" && in.ACL == nil && old == nil {
@@ -531,11 +557,14 @@ func (s *Server) persistRule(r *http.Request, in *model.Rule, old *model.Rule) e
 		return e
 	}
 	if e == nil && owner != in.ID {
-		return errors.New("public resource is occupied or awaiting revocation acknowledgement")
+		return errors.New("公网资源已被占用或正在释放")
 	}
 	changes := []resourceDelta{}
 	if old == nil {
 		changes = append(changes, resourceDelta{"rules", 1})
+	}
+	if isSite && (old == nil || (old.Protocol != "http" && old.Protocol != "https")) {
+		changes = append(changes, resourceDelta{"sites", 1})
 	}
 	if !isSite && e == sql.ErrNoRows {
 		changes = append(changes, resourceDelta{"ports", 1})

@@ -83,6 +83,17 @@ func (s *Server) portResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if !isAdmin(r) {
+		q, e := readQuota(r.Context(), tx, tenant(r), false)
+		if e != nil {
+			apiErr(w, 503, "database_unavailable", e.Error())
+			return
+		}
+		if !edgeAllowed(q, edgeID) {
+			apiErr(w, 403, "plan_node_denied", "套餐未包含该出口节点")
+			return
+		}
+	}
 	edge := model.Edge{ID: edgeID}
 	var raw string
 	err = tx.QueryRowContext(r.Context(), "SELECT endpoints,http_port,https_port,port_min,port_max FROM edges WHERE id=?", edgeID).Scan(&raw, &edge.HTTPPort, &edge.HTTPSPort, &edge.PortMin, &edge.PortMax)

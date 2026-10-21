@@ -31,6 +31,10 @@ func (s *Server) routes() http.Handler {
 	m.HandleFunc("/auth/login", s.login)
 	m.HandleFunc("/auth/logout", s.auth(s.logout))
 	m.HandleFunc("/api/v1/me", s.auth(s.me))
+	m.HandleFunc("/api/v1/account", s.auth(s.account))
+	m.HandleFunc("/api/v1/account/password", s.auth(s.accountPassword))
+	m.HandleFunc("/api/v1/plans", s.authAdmin(s.plans))
+	m.HandleFunc("/api/v1/plans/", s.authAdmin(s.plan))
 	m.HandleFunc("/api/v1/overview", s.auth(s.overview))
 	m.HandleFunc("/api/v1/devices", s.auth(s.devices))
 	m.HandleFunc("/api/v1/devices/", s.auth(s.device))
@@ -53,6 +57,7 @@ func (s *Server) routes() http.Handler {
 	m.HandleFunc("/api/v1/quotas", s.auth(s.quotas))
 	m.HandleFunc("/api/v1/quotas/", s.authAdmin(s.quota))
 	m.HandleFunc("/api/v1/usage", s.auth(s.usage))
+	m.HandleFunc("/api/v1/usage-summary", s.auth(s.usageSummary))
 	m.HandleFunc("/api/v1/audit", s.authAdmin(s.auditAPI))
 	m.HandleFunc("/api/v1/system", s.auth(s.system))
 	m.HandleFunc("/api/v1/users", s.authAdmin(s.users))
@@ -336,6 +341,26 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		if e := s.store(r.Context()).QueryRowContext(r.Context(), q.sql, q.args...).Scan(q.dest); e != nil {
 			apiErr(w, 503, "database_unavailable", "could not read overview")
 			return
+		}
+	}
+	if !platform {
+		q, err := readQuota(r.Context(), s.store(r.Context()), tenant(r), false)
+		if err != nil {
+			apiErr(w, 503, "database_unavailable", err.Error())
+			return
+		}
+		if q.AllowedEdgeIDs != nil {
+			items, e := s.loadEdges(r.Context(), "")
+			if e != nil {
+				apiErr(w, 503, "database_unavailable", e.Error())
+				return
+			}
+			edges = 0
+			for _, edge := range items {
+				if edgeAllowed(q, edge.ID) {
+					edges++
+				}
+			}
 		}
 	}
 	var up, down int64

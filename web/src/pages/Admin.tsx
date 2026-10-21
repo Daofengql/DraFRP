@@ -19,13 +19,8 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import {
-  fmtBytes,
-  fmtDate,
-  fmtLimit,
-  fmtRate,
-  observedOnline,
-} from "../format";
+import { request } from "../api";
+import { fmtDate, fmtRate, observedOnline } from "../format";
 import {
   Confirm,
   Empty,
@@ -40,7 +35,7 @@ import {
   useSessionContext,
   useWriter,
 } from "../ui";
-import type { Edge, Endpoint, Quota, Rule, User } from "../types";
+import type { Edge, Endpoint, Plan, Quota, Rule, User, List } from "../types";
 import EdgeDetails from "./EdgeDetails";
 
 function UserForm({
@@ -52,7 +47,9 @@ function UserForm({
   tenants: string[];
   onClose: () => void;
 }) {
+  const plans = useResource<Plan>("/plans", "plans", !initial);
   const [form, setForm] = useState({
+    plan_id: "default",
     username: initial?.username || "",
     password: "",
     role: initial?.role || "user",
@@ -64,7 +61,7 @@ function UserForm({
   const canClose = useDraftGuard(dirty);
   const m = useWriter(() => {
     setForm((f) => ({ ...f, password: "" }));
-    invalidate("users", "quotas", "me");
+    invalidate("users", "quotas", "account", "me");
     m.reset();
     onClose();
   });
@@ -99,6 +96,9 @@ function UserForm({
           password: form.password,
           role: form.role,
           tenant_id: form.tenant_id,
+          ...(!form.tenant_id && form.plan_id !== "default"
+            ? { plan_id: form.plan_id }
+            : {}),
         };
     m.mutate({
       path: initial ? `/users/${initial.id}` : "/users",
@@ -152,12 +152,34 @@ function UserForm({
               label="归属空间"
               value={form.tenant_id}
               onChange={(e) => set("tenant_id", e.target.value)}
-              helperText="同空间用户共享设备、规则与账号配额"
+              helperText="同空间用户共享客户端、服务与套餐"
             >
               <MenuItem value="">新建空间</MenuItem>
               {tenants.map((t) => (
                 <MenuItem key={t} value={t}>
                   {t}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {!initial && !form.tenant_id && (
+            <TextField
+              select
+              label="套餐"
+              disabled={plans.isPending || plans.isError}
+              value={form.plan_id}
+              onChange={(e) => set("plan_id", e.target.value)}
+            >
+              <MenuItem value="default">
+                {plans.isPending
+                  ? "读取中…"
+                  : plans.data?.items.find((p) => p.default)?.name || "未分配"}
+                （默认）
+              </MenuItem>
+              <MenuItem value="">未分配</MenuItem>
+              {plans.data?.items.map((p) => (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -178,6 +200,7 @@ function UserForm({
               </Alert>
             </>
           )}
+          <MutationError error={!initial ? plans.error : null} />
           {validation && <Alert severity="error">{validation}</Alert>}
           <MutationError error={m.error} />
         </Stack>
@@ -191,7 +214,10 @@ function UserForm({
           onClick={submit}
           disabled={
             m.isPending ||
-            (!initial && (!form.username.trim() || !form.password))
+            (!initial &&
+              (!form.username.trim() ||
+                !form.password ||
+                (!form.tenant_id && (plans.isPending || plans.isError))))
           }
         >
           {m.isPending ? "提交中…" : "保存"}
@@ -204,20 +230,34 @@ function UserForm({
 export function UsersPage() {
   const q = useResource<User>("/users", "users");
   const { user } = useSessionContext();
-  const [editing, setEditing] = useState<User | "new">();
+  const [editing, setEditing] = useState<User | "new">(),
+    [assigning, setAssigning] = useState<User>();
+  const [search, setSearch] = useState("");
+  const quotas = useResource<Quota>("/quotas", "quotas");
+  const rows =
+    q.data?.items.filter((u) =>
+      `${u.username} ${u.plan_name || ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    ) || [];
   return (
     <>
       <PageTitle
-        title="用户与空间"
-        detail="用户账号、角色与空间归属"
+        title="用户管理"
         action={
           <Button variant="contained" onClick={() => setEditing("new")}>
             创建用户
           </Button>
         }
       />
+      <TextField
+        label="搜索用户或套餐"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        sx={{ mb: 1.5 }}
+      />
       <Load loading={q.isLoading} error={q.error}>
-        {!q.data?.items.length ? (
+        {!rows.length ? (
           <Empty title="暂无用户" />
         ) : (
           <TableFrame>
@@ -225,25 +265,40 @@ export function UsersPage() {
               <TableRow>
                 <TableCell>用户名</TableCell>
                 <TableCell>角色</TableCell>
-                <TableCell>空间</TableCell>
+                <TableCell>套餐</TableCell>
+                <TableCell>端口 / 网站</TableCell>
+                <TableCell>注册时间</TableCell>
                 <TableCell>状态</TableCell>
                 <TableCell>操作</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {q.data.items.map((u) => (
+              {rows.map((u) => (
                 <TableRow key={u.id}>
                   <TableCell>
                     {u.username}
                     {u.id === user.id ? "（当前账号）" : ""}
                   </TableCell>
-                  <TableCell>{u.role}</TableCell>
-                  <TableCell className="mono">{u.tenant_id}</TableCell>
+                  <TableCell>
+                    {u.role === "admin" ? "管理员" : "用户"}
+                  </TableCell>
+                  <TableCell>{u.plan_name || "未分配"}</TableCell>
+                  <TableCell>
+                    {quotas.data?.items.find((q) => q.tenant_id === u.tenant_id)
+                      ?.resources?.ports ?? "—"}{" "}
+                    /{" "}
+                    {quotas.data?.items.find((q) => q.tenant_id === u.tenant_id)
+                      ?.resources?.sites ?? "—"}
+                  </TableCell>
+                  <TableCell>{fmtDate(u.created_at)}</TableCell>
                   <TableCell>
                     <Status value={u.disabled ? "disabled" : "active"} />
                   </TableCell>
                   <TableCell>
-                    <Button onClick={() => setEditing(u)}>编辑 / 停用</Button>
+                    <Stack direction="row">
+                      <Button onClick={() => setAssigning(u)}>分配套餐</Button>
+                      <Button onClick={() => setEditing(u)}>编辑</Button>
+                    </Stack>
                   </TableCell>
                 </TableRow>
               ))}
@@ -251,6 +306,15 @@ export function UsersPage() {
           </TableFrame>
         )}
       </Load>
+      {assigning && (
+        <AssignPlan
+          user={assigning}
+          quota={quotas.data?.items.find(
+            (q) => q.tenant_id === assigning.tenant_id,
+          )}
+          onClose={() => setAssigning(undefined)}
+        />
+      )}
       {editing && (
         <UserForm
           initial={editing === "new" ? undefined : editing}
@@ -259,6 +323,105 @@ export function UsersPage() {
         />
       )}
     </>
+  );
+}
+
+function AssignPlan({
+  user,
+  quota,
+  onClose,
+}: {
+  user: User;
+  quota?: Quota;
+  onClose: () => void;
+}) {
+  const plans = useResource<Plan>("/plans", "plans");
+  const [planID, setPlanID] = useState(user.plan_id || "");
+  const [version, setVersion] = useState<number | undefined>(quota?.version);
+  const [readError, setReadError] = useState<unknown>();
+  const m = useWriter(() => {
+    invalidate(
+      "users",
+      "quotas",
+      "account",
+      "plans",
+      "edges",
+      "overview",
+      "rules",
+    );
+    onClose();
+  });
+  return (
+    <Dialog
+      open
+      fullWidth
+      maxWidth="xs"
+      onClose={() => !m.isPending && onClose()}
+    >
+      <DialogTitle>分配套餐 · {user.username}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={1.5} sx={{ pt: 1 }}>
+          <Load loading={plans.isLoading} error={plans.error}>
+            <TextField
+              select
+              fullWidth
+              label="套餐"
+              value={planID}
+              onChange={(e) => setPlanID(e.target.value)}
+            >
+              <MenuItem value="">未分配</MenuItem>
+              {plans.data?.items.map((p) => (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Load>
+          <Typography variant="caption" color="text.secondary">
+            空间：{user.tenant_id}
+          </Typography>
+          <Typography variant="body2">
+            同空间用户共享套餐。变更后更新该空间的节点与资源权限。
+          </Typography>
+          <MutationError
+            error={m.error}
+            reload={async () => {
+              try {
+                const list = await request<List<Quota>>("/quotas");
+                setVersion(
+                  list.items.find((q) => q.tenant_id === user.tenant_id)
+                    ?.version,
+                );
+                m.reset();
+                setReadError(undefined);
+                invalidate("quotas");
+              } catch (e) {
+                setReadError(e);
+              }
+            }}
+          />
+          <MutationError error={readError} />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={m.isPending}>
+          取消
+        </Button>
+        <Button
+          variant="contained"
+          disabled={!quota || plans.isError || m.isPending}
+          onClick={() =>
+            m.mutate({
+              path: `/users/${user.id}/plan`,
+              method: "PUT",
+              data: { plan_id: planID, version: version ?? quota?.version },
+            })
+          }
+        >
+          保存
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -368,7 +531,7 @@ function EdgeForm({
   return (
     <Dialog open onClose={close} fullWidth maxWidth="md">
       <DialogTitle>
-        {created ? "边缘已登记" : initial ? "编辑边缘节点" : "登记边缘节点"}
+        {created ? "出口节点已登记" : initial ? "编辑出口节点" : "登记出口节点"}
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2.5} sx={{ mt: 1 }}>
@@ -378,7 +541,7 @@ function EdgeForm({
                 {created.name} 已登记，等待节点连接。
               </Alert>
               <TextField
-                label="边缘 ID"
+                label="出口节点 ID"
                 value={created.id}
                 slotProps={{ input: { readOnly: true } }}
               />
@@ -408,7 +571,9 @@ function EdgeForm({
                 onChange={(e) => set("listen_host", e.target.value)}
                 helperText="不含端口；留空使用默认地址"
               />
-              <Typography variant="h6">承载入口（Agent → 边缘）</Typography>
+              <Typography variant="h6">
+                承载入口（客户端 → 出口节点）
+              </Typography>
               {form.endpoints.map((ep, i) => (
                 <Paper variant="outlined" key={i} sx={{ p: 2 }}>
                   <Stack spacing={2}>
@@ -515,7 +680,7 @@ function EdgeForm({
           {!initial && (
             <>
               <TextField
-                label="边缘令牌"
+                label="出口节点令牌"
                 type={reveal ? "text" : "password"}
                 value={form.token}
                 onChange={(e) => set("token", e.target.value)}
@@ -578,23 +743,23 @@ export function EdgesPage() {
   return (
     <>
       <PageTitle
-        title="边缘与端口池"
+        title="出口节点与端口池"
         detail="节点入口、业务端口池与容量配置"
         action={
           <Button variant="contained" onClick={() => setEditing("new")}>
-            登记边缘
+            登记出口节点
           </Button>
         }
       />
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty title="暂无边缘节点" />
+          <Empty title="暂无出口节点" />
         ) : (
           <TableFrame>
             <TableHead>
               <TableRow>
                 <TableCell>名称 / 公网主机</TableCell>
-                <TableCell>Agent 承载入口</TableCell>
+                <TableCell>客户端 承载入口</TableCell>
                 <TableCell>业务端口池</TableCell>
                 <TableCell>容量</TableCell>
                 <TableCell>观测 / 修订</TableCell>
@@ -680,7 +845,7 @@ export function EdgesPage() {
       )}
       {deleting && (
         <Confirm
-          title={`删除边缘 ${deleting.name}`}
+          title={`删除出口节点 ${deleting.name}`}
           onClose={() => setDeleting(undefined)}
           onConfirm={() =>
             del.mutate({ path: `/edges/${deleting.id}`, method: "DELETE" })
@@ -690,265 +855,6 @@ export function EdgesPage() {
         >
           <Typography>删除条件：所有空间的关联规则及资源均已释放。</Typography>
         </Confirm>
-      )}
-    </>
-  );
-}
-
-const quotaFields = [
-  ["base_bps", "基准速率（bit/s）"],
-  ["peak_bps", "峰值速率（bit/s）"],
-  ["burst_bytes", "突发信用（byte）"],
-  ["max_connections", "最大并发连接"],
-  ["new_flows_per_second", "每秒新流"],
-  ["period_bytes", "周期流量（byte）"],
-] as const;
-const resourceQuotaFields = [
-  ["max_devices", "设备数量", "devices"],
-  ["max_rules", "规则数量（含站点）", "rules"],
-  ["max_ports", "公网 TCP/UDP 端口数量", "ports"],
-  ["max_domains", "域名数量", "domains"],
-] as const;
-const allQuotaFields = [...quotaFields, ...resourceQuotaFields];
-function QuotaForm({
-  initial,
-  latest,
-  reload,
-  onClose,
-}: {
-  initial: Quota;
-  latest?: Quota;
-  reload: () => void;
-  onClose: () => void;
-}) {
-  const [form, setForm] = useState(initial),
-    [dirty, setDirty] = useState(false),
-    [validation, setValidation] = useState(""),
-    [compare, setCompare] = useState(false);
-  const canClose = useDraftGuard(dirty);
-  const m = useWriter(() => {
-    invalidate("quotas");
-    onClose();
-  });
-  const submit = () => {
-    if (
-      form.period_seconds !== undefined &&
-      (!Number.isSafeInteger(form.period_seconds) ||
-        form.period_seconds < 0 ||
-        form.period_seconds > 31622400 ||
-        (form.period_seconds > 0 && form.period_seconds < 60))
-    ) {
-      setValidation("流量周期填写 0（不限期）或 60–31622400 秒。");
-      return;
-    }
-    if (
-      allQuotaFields.some(
-        ([k]) =>
-          !Number.isSafeInteger(form[k] ?? -1) ||
-          (form[k] ?? -1) < (k === "burst_bytes" ? 0 : -1),
-      )
-    ) {
-      setValidation("请填写有效整数。突发信用 ≥ 0，其他上限 ≥ -1。");
-      return;
-    }
-    if (resourceQuotaFields.some(([k]) => (form[k] ?? -1) > 1000000)) {
-      setValidation("配置资源上限填写 -1（不限）或 0–1000000。");
-      return;
-    }
-    if (
-      form.base_bps >= 0 &&
-      form.peak_bps >= 0 &&
-      form.peak_bps < form.base_bps
-    ) {
-      setValidation("峰值速率不能低于基准速率。");
-      return;
-    }
-    m.mutate({
-      path: `/quotas/${initial.tenant_id}`,
-      method: "PUT",
-      data: { ...form, version: form.version },
-    });
-  };
-  return (
-    <Dialog
-      open
-      onClose={() => !m.isPending && canClose() && onClose()}
-      fullWidth
-      maxWidth="sm"
-    >
-      <DialogTitle>编辑账号配额</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <Typography className="mono">{initial.tenant_id}</Typography>
-          <Typography variant="h6">运行预算</Typography>
-          {quotaFields.map(([key, label]) => (
-            <TextField
-              key={key}
-              type="number"
-              label={label}
-              value={form[key]}
-              helperText={
-                key === "burst_bytes" ? "0 = 无额外信用" : "-1 = 不限，0 = 禁止"
-              }
-              onChange={(e) => {
-                setDirty(true);
-                setForm((f) => ({ ...f, [key]: Number(e.target.value) }));
-              }}
-              slotProps={{
-                htmlInput: { min: key === "burst_bytes" ? 0 : -1, step: 1 },
-              }}
-            />
-          ))}
-          <TextField
-            type="number"
-            label="流量周期（秒）"
-            value={form.period_seconds ?? 0}
-            onChange={(e) => {
-              setDirty(true);
-              setForm((f) => ({
-                ...f,
-                period_seconds: Number(e.target.value),
-              }));
-            }}
-            helperText="0 = 不限期；周期范围 60–31622400 秒"
-          />
-          <Typography variant="body2">
-            当前周期：{form.period_id || "未记录"} · 到期：
-            {form.period_seconds ? fmtDate(form.period_ends_at) : "不限期"}
-          </Typography>
-          <Typography variant="h6">配置资源上限</Typography>
-          {resourceQuotaFields.map(([key, label]) => (
-            <TextField
-              key={key}
-              type="number"
-              label={label}
-              value={form[key] ?? -1}
-              onChange={(e) => {
-                setDirty(true);
-                setForm((f) => ({ ...f, [key]: Number(e.target.value) }));
-              }}
-              slotProps={{ htmlInput: { min: -1, max: 1000000, step: 1 } }}
-              helperText="-1 = 不限，0 = 禁止新增"
-            />
-          ))}
-          <Alert severity="warning">
-            降低配额可能限制新增资源、连接和流量。
-          </Alert>
-          {validation && <Alert severity="error">{validation}</Alert>}
-          <MutationError
-            error={m.error}
-            reload={() => {
-              reload();
-              setCompare(true);
-            }}
-          />
-          {compare && latest && (
-            <Paper variant="outlined" sx={{ p: 2 }}>
-              <Typography>最新版本 v{latest.version}</Typography>
-              {allQuotaFields.map(([k, label]) => (
-                <Typography key={k} variant="body2">
-                  {label}：{latest[k] ?? -1}
-                </Typography>
-              ))}
-              <Button
-                onClick={() => {
-                  setForm((f) => ({ ...f, version: latest.version }));
-                  setCompare(false);
-                  m.reset();
-                }}
-              >
-                保留输入，使用最新版本
-              </Button>
-            </Paper>
-          )}
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button disabled={m.isPending} onClick={() => canClose() && onClose()}>
-          取消
-        </Button>
-        <Button variant="contained" onClick={submit} disabled={m.isPending}>
-          {m.isPending ? "保存中…" : "保存配额"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-export function QuotasPage() {
-  const q = useResource<Quota>("/quotas", "quotas");
-  const [editing, setEditing] = useState<Quota>();
-  return (
-    <>
-      <PageTitle title="账号配额" detail="空间共享配额与资源数量上限" />
-      <Load loading={q.isLoading} error={q.error}>
-        {!q.data?.items.length ? (
-          <Empty title="暂无账号配额" />
-        ) : (
-          <TableFrame>
-            <TableHead>
-              <TableRow>
-                <TableCell>空间 / 版本</TableCell>
-                <TableCell>基准 / 峰值</TableCell>
-                <TableCell>突发信用</TableCell>
-                <TableCell>并发 / 每秒新流</TableCell>
-                <TableCell>周期用量 / 上限</TableCell>
-                <TableCell>预留份额</TableCell>
-                <TableCell>配置资源占用 / 上限</TableCell>
-                <TableCell>操作</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {q.data.items.map((x) => (
-                <TableRow key={x.tenant_id}>
-                  <TableCell>
-                    <Typography className="mono">{x.tenant_id}</Typography>v
-                    {x.version}
-                  </TableCell>
-                  <TableCell>
-                    {fmtRate(x.base_bps)}
-                    <br />
-                    {fmtRate(x.peak_bps)}
-                  </TableCell>
-                  <TableCell>{fmtBytes(x.burst_bytes)}</TableCell>
-                  <TableCell>
-                    {fmtLimit(x.max_connections)} /{" "}
-                    {fmtLimit(x.new_flows_per_second)}
-                  </TableCell>
-                  <TableCell>
-                    {fmtBytes(x.used_bytes)} /{" "}
-                    {x.period_bytes === 0
-                      ? "禁止 (0 B)"
-                      : fmtBytes(x.period_bytes)}
-                  </TableCell>
-                  <TableCell>{fmtBytes(x.reserved_bytes)}</TableCell>
-                  <TableCell>
-                    {resourceQuotaFields.map(([key, label, usageKey]) => {
-                      const count = x.resources?.[usageKey];
-                      return (
-                        <Typography key={key} variant="body2" noWrap>
-                          {label}：{count ?? "未统计"} /{" "}
-                          {x[key] === undefined ? "未上报" : fmtLimit(x[key]!)}
-                        </Typography>
-                      );
-                    })}
-                  </TableCell>
-                  <TableCell>
-                    <Button onClick={() => setEditing(x)}>编辑</Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </TableFrame>
-        )}
-      </Load>
-      {editing && (
-        <QuotaForm
-          initial={editing}
-          latest={q.data?.items.find((x) => x.tenant_id === editing.tenant_id)}
-          reload={() => void q.refetch()}
-          onClose={() => setEditing(undefined)}
-        />
       )}
     </>
   );

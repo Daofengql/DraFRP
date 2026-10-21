@@ -5,11 +5,40 @@ export interface User {
   role: string;
   tenant_id: string;
   disabled: boolean;
+  created_at?: string;
+  plan_id?: string;
+  plan_name?: string;
 }
 export interface Session {
   user: User;
   csrf_token: string;
   build_id?: string;
+}
+export interface Plan {
+  id: string;
+  name: string;
+  bandwidth_bps: number;
+  burst_enabled: boolean;
+  burst_bps: number;
+  burst_seconds: number;
+  traffic_metered: boolean;
+  traffic_bytes: number;
+  period_seconds: number;
+  overage_action: "reject" | "throttle";
+  overage_bps: number;
+  max_ports: number;
+  max_sites: number;
+  all_edges: boolean;
+  edge_ids: string[];
+  default: boolean;
+  version: number;
+  members: number;
+  legacy: boolean;
+}
+export interface Account {
+  user: User;
+  plan: Plan | null;
+  quota: Quota;
 }
 export interface Device {
   id: string;
@@ -166,6 +195,7 @@ export interface ACLTemplate {
   mandatory: boolean;
 }
 export interface Rule {
+  plan_restricted?: boolean;
   id: string;
   tenant_id: string;
   name: string;
@@ -207,6 +237,9 @@ export interface Certificate {
   expires_at: string;
 }
 export interface Quota {
+  plan_id: string;
+  allowed_edge_ids: string[] | null;
+  max_sites: number;
   tenant_id: string;
   base_bps: number;
   peak_bps: number;
@@ -218,6 +251,7 @@ export interface Quota {
   max_ports?: number;
   max_domains?: number;
   resources?: {
+    sites: number;
     devices: number;
     rules: number;
     ports: number;
@@ -225,6 +259,8 @@ export interface Quota {
     observed_at: string;
   };
   period_bytes: number;
+  overage_action: "reject" | "throttle";
+  overage_bps: number;
   used_bytes: number;
   reserved_bytes: number;
   version: number;

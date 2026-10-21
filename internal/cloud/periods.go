@@ -4,19 +4,27 @@ import (
 	"context"
 	"database/sql"
 	"drafrp/internal/model"
+	"encoding/json"
+	"errors"
 	"time"
 )
 
-const quotaColumns = "tenant_id,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,period_bytes,used_bytes,reserved_bytes,version,period_id,period_seconds,period_started_at,period_ends_at,max_devices,max_rules,max_ports,max_domains"
+const quotaColumns = "tenant_id,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,period_bytes,used_bytes,reserved_bytes,version,period_id,period_seconds,period_started_at,period_ends_at,max_devices,max_rules,max_ports,max_domains,max_sites,plan_id,allowed_edge_ids,overage_action,overage_bps"
 
 func readQuota(ctx context.Context, db sqlStore, tid string, locked bool) (model.Quota, error) {
 	q := model.Quota{}
 	var start, end sql.NullTime
+	var edges sql.NullString
 	suffix := ""
 	if locked {
 		suffix = " FOR UPDATE"
 	}
-	e := db.QueryRowContext(ctx, "SELECT "+quotaColumns+" FROM quotas WHERE tenant_id=?"+suffix, tid).Scan(&q.TenantID, &q.BaseBPS, &q.PeakBPS, &q.BurstBytes, &q.MaxConnections, &q.NewFlowsPerSecond, &q.PeriodBytes, &q.UsedBytes, &q.ReservedBytes, &q.Version, &q.PeriodID, &q.PeriodSeconds, &start, &end, &q.MaxDevices, &q.MaxRules, &q.MaxPorts, &q.MaxDomains)
+	e := db.QueryRowContext(ctx, "SELECT "+quotaColumns+" FROM quotas WHERE tenant_id=?"+suffix, tid).Scan(&q.TenantID, &q.BaseBPS, &q.PeakBPS, &q.BurstBytes, &q.MaxConnections, &q.NewFlowsPerSecond, &q.PeriodBytes, &q.UsedBytes, &q.ReservedBytes, &q.Version, &q.PeriodID, &q.PeriodSeconds, &start, &end, &q.MaxDevices, &q.MaxRules, &q.MaxPorts, &q.MaxDomains, &q.MaxSites, &q.PlanID, &edges, &q.OverageAction, &q.OverageBPS)
+	if edges.Valid {
+		if err := json.Unmarshal([]byte(edges.String), &q.AllowedEdgeIDs); err != nil || q.AllowedEdgeIDs == nil {
+			return q, errors.New("invalid package node policy")
+		}
+	}
 	q.PeriodStartedAt = start.Time
 	q.PeriodEndsAt = end.Time
 	return q, e
@@ -32,7 +40,7 @@ func sqlTime(t time.Time) any {
 // Retiring a period conservatively charges outstanding credit to THAT period;
 // no old report can subtract from, or spend, a new period's allocation.
 func (s *Server) currentQuota(ctx context.Context, tx *businessTx, tid string) (model.Quota, error) {
-	if _, e := tx.ExecContext(ctx, "INSERT IGNORE INTO quotas(tenant_id,updated_at) VALUES(?,?)", tid, now()); e != nil {
+	if _, e := tx.ExecContext(ctx, "INSERT IGNORE INTO quotas(tenant_id,base_bps,peak_bps,max_ports,max_sites,allowed_edge_ids,updated_at) VALUES(?,0,0,0,0,JSON_ARRAY(),?)", tid, now()); e != nil {
 		return model.Quota{}, e
 	}
 	q, e := readQuota(ctx, tx, tid, true)

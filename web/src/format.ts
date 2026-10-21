@@ -26,6 +26,13 @@ export function fmtLimit(n: number, unit = "") {
       ? "禁止 (0)"
       : `${n.toLocaleString("zh-CN")}${unit}`;
 }
+export function fmtPeriod(seconds = 0) {
+  if (!seconds) return "不重置";
+  if (seconds % 86400 === 0) return `每 ${seconds / 86400} 天`;
+  if (seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`;
+  if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`;
+  return `每 ${seconds} 秒`;
+}
 export function fmtDate(value?: string) {
   if (!value || value.startsWith("0001-")) return "未上报";
   const d = new Date(value);
@@ -41,12 +48,15 @@ export function ruleState(rule: {
   deleting: boolean;
   enabled: boolean;
   status: string;
+  plan_restricted?: boolean;
 }) {
   return rule.deleting
     ? "deleting"
-    : !rule.enabled
-      ? "disabled"
-      : rule.status || "unknown";
+    : rule.plan_restricted
+      ? "plan_restricted"
+      : !rule.enabled
+        ? "disabled"
+        : rule.status || "unknown";
 }
 export function nativeSourceCapability(
   protocol: string,

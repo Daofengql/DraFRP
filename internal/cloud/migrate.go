@@ -23,6 +23,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS domains(id VARCHAR(64) PRIMARY KEY,tenant_id VARCHAR(64) NOT NULL,domain VARCHAR(253) NOT NULL,challenge VARCHAR(96) NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'pending',verified_at DATETIME(6),created_at DATETIME(6) NOT NULL,UNIQUE KEY tenant_domain(tenant_id,domain),FOREIGN KEY(tenant_id) REFERENCES tenants(id) ON DELETE CASCADE) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS domain_ownership(domain VARCHAR(253) PRIMARY KEY,tenant_id VARCHAR(64) NOT NULL,FOREIGN KEY(tenant_id) REFERENCES tenants(id) ON DELETE CASCADE) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS quotas(tenant_id VARCHAR(64) PRIMARY KEY,base_bps BIGINT NOT NULL DEFAULT -1,peak_bps BIGINT NOT NULL DEFAULT -1,burst_bytes BIGINT NOT NULL DEFAULT 0,max_connections INT NOT NULL DEFAULT -1,new_flows_per_second INT NOT NULL DEFAULT -1,period_bytes BIGINT NOT NULL DEFAULT -1,used_bytes BIGINT NOT NULL DEFAULT 0,reserved_bytes BIGINT NOT NULL DEFAULT 0,version BIGINT UNSIGNED NOT NULL DEFAULT 1,updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS plans(id VARCHAR(64) PRIMARY KEY,name VARCHAR(255) NOT NULL,bandwidth_bps BIGINT NOT NULL,max_ports INT NOT NULL,max_sites INT NOT NULL,all_edges BOOLEAN NOT NULL DEFAULT 0,edge_ids JSON NOT NULL,version BIGINT UNSIGNED NOT NULL DEFAULT 1,legacy BOOLEAN NOT NULL DEFAULT 0,created_at DATETIME(6) NOT NULL,updated_at DATETIME(6) NOT NULL) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS plan_settings(id INT PRIMARY KEY,default_plan_id VARCHAR(64) NOT NULL DEFAULT '') ENGINE=InnoDB`,
+		`INSERT IGNORE INTO plan_settings(id) VALUES(1)`,
 		`CREATE TABLE IF NOT EXISTS quota_periods(tenant_id VARCHAR(64) NOT NULL,period_id VARCHAR(64) NOT NULL,started_at DATETIME(6) NOT NULL,ends_at DATETIME(6),used_bytes BIGINT NOT NULL DEFAULT 0,reserved_bytes BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(tenant_id,period_id)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS grants_table(id VARCHAR(64) PRIMARY KEY,tenant_id VARCHAR(64) NOT NULL,edge_id VARCHAR(64) NOT NULL,boot_id VARCHAR(96) NOT NULL,expires_at DATETIME(6) NOT NULL,bytes BIGINT NOT NULL,base_bps BIGINT NOT NULL,peak_bps BIGINT NOT NULL,burst_bytes BIGINT NOT NULL,max_connections INT NOT NULL,new_flows_per_second INT NOT NULL,policy_version BIGINT UNSIGNED NOT NULL DEFAULT 1,reserved BIGINT NOT NULL DEFAULT 0,used BIGINT NOT NULL DEFAULT 0,closed BOOLEAN NOT NULL DEFAULT 0,created_at DATETIME(6) NOT NULL,INDEX(edge_id),INDEX(tenant_id)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS usage_table(grant_id VARCHAR(64) PRIMARY KEY,tenant_id VARCHAR(64) NOT NULL,edge_id VARCHAR(64) NOT NULL,boot_id VARCHAR(96) NOT NULL,sequence_no BIGINT UNSIGNED NOT NULL DEFAULT 0,upload_bytes BIGINT NOT NULL DEFAULT 0,download_bytes BIGINT NOT NULL DEFAULT 0,closed BOOLEAN NOT NULL DEFAULT 0,observed_at DATETIME(6) NOT NULL) ENGINE=InnoDB`,
@@ -45,6 +48,19 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		{"quotas", "max_rules", "INT NOT NULL DEFAULT -1"},
 		{"quotas", "max_ports", "INT NOT NULL DEFAULT -1"},
 		{"quotas", "max_domains", "INT NOT NULL DEFAULT -1"},
+		{"quotas", "max_sites", "INT NOT NULL DEFAULT -1"},
+		{"quotas", "plan_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"quotas", "allowed_edge_ids", "JSON NULL"},
+		{"quotas", "overage_action", "VARCHAR(16) NOT NULL DEFAULT 'reject'"},
+		{"quotas", "overage_bps", "BIGINT NOT NULL DEFAULT 0"},
+		{"plans", "burst_enabled", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"plans", "burst_bps", "BIGINT NOT NULL DEFAULT 0"},
+		{"plans", "burst_seconds", "BIGINT NOT NULL DEFAULT 0"},
+		{"plans", "traffic_metered", "BOOLEAN NOT NULL DEFAULT 0"},
+		{"plans", "traffic_bytes", "BIGINT NOT NULL DEFAULT 0"},
+		{"plans", "period_seconds", "BIGINT NOT NULL DEFAULT 0"},
+		{"plans", "overage_action", "VARCHAR(16) NOT NULL DEFAULT 'reject'"},
+		{"plans", "overage_bps", "BIGINT NOT NULL DEFAULT 0"},
 		{"resource_claims", "tenant_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
 		{"quotas", "period_seconds", "BIGINT NOT NULL DEFAULT 0"},
 		{"quotas", "period_started_at", "DATETIME(6) NULL"},
@@ -73,6 +89,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return e
 		}
 	}
+	var planIndex int
+	if e := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='quotas' AND index_name='plan_assignment'").Scan(&planIndex); e != nil {
+		return e
+	}
+	if planIndex == 0 {
+		if _, e := db.ExecContext(ctx, "ALTER TABLE quotas ADD INDEX plan_assignment(plan_id,tenant_id)"); e != nil {
+			return e
+		}
+	}
 	// Port reservations can outlive their rule after a move and acknowledgement
 	// on the new edge. Keep their owner on the claim so they remain charged.
 	if _, e := db.ExecContext(ctx, `UPDATE resource_claims c JOIN rules r ON r.id=c.rule_id SET c.tenant_id=r.tenant_id WHERE c.tenant_id=''`); e != nil {
@@ -95,6 +120,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if _, e := db.ExecContext(ctx, `INSERT IGNORE INTO quota_periods(tenant_id,period_id,started_at,ends_at,used_bytes,reserved_bytes) SELECT tenant_id,period_id,COALESCE(period_started_at,updated_at),period_ends_at,used_bytes,reserved_bytes FROM quotas`); e != nil {
 		return e
+	}
+	if err := migratePlans(ctx, db); err != nil {
+		return err
 	}
 	return migrateACLObservations(ctx, db)
 }

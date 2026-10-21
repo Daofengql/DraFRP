@@ -98,7 +98,7 @@ export default function PortsPage() {
     <>
       <PageTitle
         title="公网端口"
-        detail="各边缘节点的端口分配状态"
+        detail="各出口节点的端口分配状态"
         action={
           <Button
             onClick={() => ports.refetch()}
@@ -110,13 +110,13 @@ export default function PortsPage() {
       />
       <Load loading={edges.isPending} error={edges.error}>
         {!items.length ? (
-          <Empty title="暂无边缘节点" />
+          <Empty title="暂无出口节点" />
         ) : (
           <Stack spacing={2}>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
               <TextField
                 select
-                label="边缘节点"
+                label="出口节点"
                 value={edgeID}
                 onChange={(e) => {
                   setParams({ edge_id: e.target.value });

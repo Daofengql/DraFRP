@@ -10,5 +10,6 @@ type ResourceUsage struct {
 	Rules      int64     `json:"rules"`
 	Ports      int64     `json:"ports"`
 	Domains    int64     `json:"domains"`
+	Sites      int64     `json:"sites"`
 	ObservedAt time.Time `json:"observed_at"`
 }

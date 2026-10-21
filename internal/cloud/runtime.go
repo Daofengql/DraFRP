@@ -230,7 +230,11 @@ func (s *Server) queryEdges(ctx context.Context, eid string) ([]model.Edge, erro
 	return out, rows.Err()
 }
 func (s *Server) rulesForEdge(r *http.Request, eid string) ([]model.Rule, error) {
-	return s.queryRules(r.Context(), " WHERE edge_id=?", eid)
+	rules, err := s.queryRules(r.Context(), " WHERE edge_id=?", eid)
+	if err != nil {
+		return nil, err
+	}
+	return s.restrictPlanRules(r.Context(), rules)
 }
 func (s *Server) devicesForRules(r *http.Request, rules []model.Rule) ([]model.DeviceGrant, error) {
 	seen := map[string]bool{}
@@ -500,7 +504,11 @@ func scopeDeviceRuntime(ctx context.Context, tx sqlStore, deviceID string, runti
 	return nil
 }
 func (s *Server) rulesForDevice(r *http.Request, did string) ([]model.Rule, error) {
-	return s.queryRules(r.Context(), " WHERE device_id=? AND deleting=0", did)
+	rules, err := s.queryRules(r.Context(), " WHERE device_id=? AND deleting=0", did)
+	if err != nil {
+		return nil, err
+	}
+	return s.restrictPlanRules(r.Context(), rules)
 }
 
 // Grants are serialized by the durable tenant quota row. Expired, unreported
@@ -537,6 +545,17 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 	if e != nil {
 		return model.Grant{}, e
 	}
+	if !edgeAllowed(q, eid) {
+		return model.Grant{}, nil
+	}
+	waitForCredit := q.PeriodBytes >= 0 && q.OverageAction == "throttle" && q.OverageBPS > 0
+	overage := waitForCredit && q.UsedBytes >= q.PeriodBytes
+	base, peak, burst := q.BaseBPS, q.PeakBPS, q.BurstBytes
+	if overage {
+		base, peak, burst = q.OverageBPS, q.OverageBPS, 0
+	} else if q.PeriodBytes >= 0 && q.UsedBytes >= q.PeriodBytes {
+		base, peak, burst = 0, 0, 0
+	}
 	rows, e := tx.QueryContext(ctx, "SELECT id,tenant_id,edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,used FROM grants_table WHERE tenant_id=? AND closed=0", tid)
 	if e != nil {
 		return model.Grant{}, e
@@ -569,7 +588,9 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 			edgeRows.Close()
 			return model.Grant{}, e
 		}
-		edgeIDs = append(edgeIDs, edgeID)
+		if edgeAllowed(q, edgeID) {
+			edgeIDs = append(edgeIDs, edgeID)
+		}
 	}
 	e = edgeRows.Err()
 	edgeRows.Close()
@@ -594,13 +615,18 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 		}
 		return 0
 	}
-	share := func(total int64, except string, which func(model.Grant) int64) int64 {
+	share := func(total int64, except string, rate bool, which func(model.Grant) int64) int64 {
 		if total < 0 {
 			return -1
 		}
 		left := total
 		for _, other := range live {
 			if other.ID == except {
+				continue
+			}
+			// A fully consumed lease cannot transmit. At the traffic boundary it
+			// must not reserve its old high rate against the new reduced rate.
+			if rate && other.Bytes <= used[other.ID] {
 				continue
 			}
 			v := which(other)
@@ -620,21 +646,22 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 			// online edge tightens immediately without resetting buckets or active
 			// permits. Other live leases (including unlimited old policies) remain
 			// reserved until they are updated, settled or expire.
-			g.BaseBPS = share(q.BaseBPS, g.ID, func(g model.Grant) int64 { return g.BaseBPS })
-			g.PeakBPS = share(q.PeakBPS, g.ID, func(g model.Grant) int64 { return g.PeakBPS })
-			g.BurstBytes = share(q.BurstBytes, g.ID, func(g model.Grant) int64 { return g.BurstBytes })
-			g.MaxConnections = int(share(int64(q.MaxConnections), g.ID, func(g model.Grant) int64 { return int64(g.MaxConnections) }))
-			g.NewFlowsPerSecond = int(share(int64(q.NewFlowsPerSecond), g.ID, func(g model.Grant) int64 { return int64(g.NewFlowsPerSecond) }))
+			g.BaseBPS = share(base, g.ID, true, func(g model.Grant) int64 { return g.BaseBPS })
+			g.PeakBPS = share(peak, g.ID, true, func(g model.Grant) int64 { return g.PeakBPS })
+			g.BurstBytes = share(burst, g.ID, true, func(g model.Grant) int64 { return g.BurstBytes })
+			g.MaxConnections = int(share(int64(q.MaxConnections), g.ID, false, func(g model.Grant) int64 { return int64(g.MaxConnections) }))
+			g.NewFlowsPerSecond = int(share(int64(q.NewFlowsPerSecond), g.ID, false, func(g model.Grant) int64 { return int64(g.NewFlowsPerSecond) }))
+			g.WaitForCredit = waitForCredit
 			g.PolicyVersion = q.Version
 			extra := int64(0)
 			if g.Bytes-used[g.ID] < 16<<20 {
 				extra = 64 << 20
-				if q.PeriodBytes >= 0 {
+				if q.PeriodBytes >= 0 && !overage {
 					extra = min(extra, max(0, q.PeriodBytes-q.UsedBytes-q.ReservedBytes))
 				}
 			}
 			g.Bytes += extra
-			if q.PeriodBytes < 0 || q.UsedBytes+q.ReservedBytes <= q.PeriodBytes {
+			if q.PeriodBytes < 0 || overage || q.UsedBytes+q.ReservedBytes <= q.PeriodBytes {
 				g.ExpiresAt = grantExpiry(q, s.cfg.SnapshotTTL)
 			}
 			if _, e = tx.ExecContext(ctx, "UPDATE grants_table SET bytes=?,reserved=reserved+?,expires_at=?,base_bps=?,peak_bps=?,burst_bytes=?,max_connections=?,new_flows_per_second=?,policy_version=? WHERE id=?", g.Bytes, extra, g.ExpiresAt, g.BaseBPS, g.PeakBPS, g.BurstBytes, g.MaxConnections, g.NewFlowsPerSecond, g.PolicyVersion, g.ID); e != nil {
@@ -655,11 +682,11 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 	// Divide the policy across all configured edges. Existing unexpired leases,
 	// including a previous boot, retain their shares until settlement or expiry.
 	bytes := int64(64 << 20)
-	if q.PeriodBytes >= 0 {
+	if q.PeriodBytes >= 0 && !overage {
 		bytes = min(bytes, max(0, q.PeriodBytes-q.UsedBytes-q.ReservedBytes))
 	}
-	g := model.Grant{ID: id(), TenantID: tid, EdgeID: eid, BootID: boot, ExpiresAt: grantExpiry(q, s.cfg.SnapshotTTL), Bytes: bytes, PolicyVersion: q.Version, PeriodID: q.PeriodID,
-		BaseBPS: share(q.BaseBPS, "", func(g model.Grant) int64 { return g.BaseBPS }), PeakBPS: share(q.PeakBPS, "", func(g model.Grant) int64 { return g.PeakBPS }), BurstBytes: share(q.BurstBytes, "", func(g model.Grant) int64 { return g.BurstBytes }), MaxConnections: int(share(int64(q.MaxConnections), "", func(g model.Grant) int64 { return int64(g.MaxConnections) })), NewFlowsPerSecond: int(share(int64(q.NewFlowsPerSecond), "", func(g model.Grant) int64 { return int64(g.NewFlowsPerSecond) }))}
+	g := model.Grant{ID: id(), TenantID: tid, EdgeID: eid, BootID: boot, ExpiresAt: grantExpiry(q, s.cfg.SnapshotTTL), Bytes: bytes, PolicyVersion: q.Version, PeriodID: q.PeriodID, WaitForCredit: waitForCredit,
+		BaseBPS: share(base, "", true, func(g model.Grant) int64 { return g.BaseBPS }), PeakBPS: share(peak, "", true, func(g model.Grant) int64 { return g.PeakBPS }), BurstBytes: share(burst, "", true, func(g model.Grant) int64 { return g.BurstBytes }), MaxConnections: int(share(int64(q.MaxConnections), "", false, func(g model.Grant) int64 { return int64(g.MaxConnections) })), NewFlowsPerSecond: int(share(int64(q.NewFlowsPerSecond), "", false, func(g model.Grant) int64 { return int64(g.NewFlowsPerSecond) }))}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO grants_table(id,tenant_id,edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,reserved,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", g.ID, tid, eid, boot, g.ExpiresAt, bytes, g.BaseBPS, g.PeakBPS, g.BurstBytes, g.MaxConnections, g.NewFlowsPerSecond, g.PolicyVersion, g.PeriodID, bytes, now()); e != nil {
 		return model.Grant{}, e
 	}

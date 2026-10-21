@@ -1,0 +1,72 @@
+{
+  "status": "passed",
+  "scope": "Service plans, account management, shared admission, burst bandwidth and traffic overage enforcement",
+  "environment": "Windows Go 1.26.10; dedicated MySQL 8.4 and Redis 7.4 through the Hyper-V test VM; Chromium against the embedded console",
+  "regression": {
+    "cloud": {
+      "command": "go test -race ./internal/cloud -count=1 -timeout 20m -v",
+      "exit_code": 0,
+      "seconds": 580.221,
+      "top_level_tests": 49,
+      "skipped_tests": 0,
+      "database_tests_executed": true
+    },
+    "other_packages": {
+      "command": "go test -race ./... -count=1",
+      "status": "All packages except cloud passed in this invocation; cloud passed in the subsequent complete run above.",
+      "systemtest_seconds": 224.897,
+      "edge_seconds": 5.218,
+      "limiter_seconds": 9.352,
+      "first_run_limitation": "The cloud package reached the default ten-minute package timeout during a fixture login. That invocation exited 1 and is not recorded as a complete pass. The complete cloud package was rerun with a twenty-minute timeout and passed."
+    },
+    "static_analysis": "go vet ./... passed",
+    "frontend": "11 tests, TypeScript, Prettier and production Vite build passed"
+  },
+  "plan_and_account_checks": [
+    "Unique default plan; default assignment, explicit unassignment and multiple users sharing one tenant policy.",
+    "Unassigned new accounts have no usable nodes, bandwidth, ports or websites; migrated accounts preserve their existing policy.",
+    "Role and tenant isolation, version conflicts and atomic plan propagation; legacy quota writes cannot override managed plans.",
+    "Cross-node TCP/UDP port totals, independent website totals, concurrent admissions, protocol transitions and retained reservations.",
+    "Removing a node removes runtime rules, client authority and bandwidth grants; the multi-edge network test closes existing flows.",
+    "Password changes revoke other sessions and retain the current session; usage summary includes all grants beyond the raw-list limit.",
+    "Burst validation, hidden-field normalization, finite traffic cycles, reject/throttle validation and shared overage bandwidth.",
+    "Unconsumed reservations do not trigger early throttling; spent credit and burst tokens are not replenished by renewals.",
+    "Editing an elapsed cycle settles the old cycle before applying the new schedule; changing plans preserves current consumption."
+  ],
+  "real_data_plane": {
+    "test": "TestPlanTrafficThrottleRejectAndCycle",
+    "status": "passed",
+    "targeted_run_seconds": 27.18,
+    "verified": [
+      "A live TCP connection waits at the included-traffic boundary for cloud-authorized excess credit.",
+      "The same connection resumes at 8192 bit/s and records 8192 bytes of bidirectional traffic.",
+      "Reject mode closes existing connections and rejects new flows.",
+      "Cycle renewal restores the regular rate and included traffic.",
+      "The edge UDP boundary test accounts a packet across regular and excess credit and sends one complete datagram."
+    ]
+  },
+  "linux_release_smoke": {
+    "status": "passed",
+    "roles": ["cloud", "edge", "client"],
+    "tcp_bytes": 524288,
+    "udp_bytes": 48000,
+    "zero_length_udp": true,
+    "active_flow_revocation": true,
+    "embedded_console": true
+  },
+  "browser": {
+    "status": "passed",
+    "verified": [
+      "Create, edit, set default and assign a plan through the administrator console.",
+      "Configure 20 Mbps, burst to 50 Mbps for 10 seconds, 100 GiB every 30 days and 1 Mbps excess bandwidth; changes reach the user account.",
+      "Zero-allowance reject and throttle states are displayed; the test plan is restored to 100 GiB afterwards.",
+      "Create a user's TCP service and HTTP website; toggle the website and verify persisted configuration.",
+      "Website creation only offers nodes with the required HTTP/HTTPS listener and selects the sole available node.",
+      "Website entry and copy use the actual nonstandard public listener port, including :28080.",
+      "Account, dashboard, usage, service list and plan form inspected on desktop and at 390-pixel mobile width.",
+      "No page-level horizontal overflow. Mobile cards retain equal left and right margins in viewport screenshots."
+    ],
+    "fixture_boundary": "The browser website uses a verified-domain and listener-node fixture in the dedicated QA database. This browser flow verifies UI and persistence, not public DNS or live website forwarding; actual HTTP(S) forwarding is covered by system tests.",
+    "screenshot_correction": "Chromium full-page capture hid the classic scrollbar and clipped the reflowed right edge. Recapture reserves the scrollbar gutter for the screenshot; actual viewport geometry has complete card borders and equal margins. Dialog screenshots include the surrounding viewport."
+  }
+}

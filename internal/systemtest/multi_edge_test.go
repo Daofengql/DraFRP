@@ -22,7 +22,7 @@ func TestMultiEdgeSharesAccountAuthority(t *testing.T) {
 	// loops. Remote MySQL round trips under race instrumentation can outlast the
 	// short lease used by expiry tests; keep authority live until policy revoke.
 	s, browser := testCloudWithTTL(t, time.Minute)
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
 	defer cancel()
 	certFile, keyFile, certificate := certFiles(t)
 	origin, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -224,5 +224,60 @@ func TestMultiEdgeSharesAccountAuthority(t *testing.T) {
 	wait("tightened account still has active flows", func() bool {
 		return nodes[0].runtime.RuntimeStatus().ActiveFlows+nodes[1].runtime.RuntimeStatus().ActiveFlows == 0
 	})
+	// Replace the legacy policy with an actual package. Revoking a node must
+	// close listeners and old flows even when the rule version is unchanged.
+	var plan model.Plan
+	browser.api("POST", "/api/v1/plans", model.Plan{Name: "single exit package", BandwidthBPS: 10000000, MaxPorts: 2, MaxSites: 0, EdgeIDs: []string{nodes[0].edge.ID}}, &plan, 201)
+	browser.api("PUT", "/api/v1/users/"+browser.user.ID+"/plan", map[string]any{"plan_id": plan.ID, "version": quota.Version}, &quota, 200)
+	// First sync revokes the old grant; the next reports its settled credit.
+	for range 2 {
+		if err = nodes[1].runtime.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(nodes[1].runtime.Snapshot().Grants) != 0 {
+		t.Fatal("removed node retained package grant")
+	}
+	if _, err = nodes[0].agent.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = nodes[0].runtime.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := net.DialTimeout("tcp", address(nodes[0].port), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer allowed.Close()
+	_ = allowed.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err = allowed.Write([]byte("package")); err != nil {
+		t.Fatal(err)
+	}
+	var echo [7]byte
+	if _, err = io.ReadFull(allowed, echo[:]); err != nil || string(echo[:]) != "package" {
+		t.Fatal("allowed package node failed to forward", err)
+	}
+	removed, dialErr := net.DialTimeout("tcp", address(nodes[1].port), time.Second)
+	if dialErr == nil {
+		_ = removed.SetDeadline(time.Now().Add(time.Second))
+		_, _ = removed.Write([]byte("removed"))
+		_, readErr := removed.Read(echo[:])
+		_ = removed.Close()
+		if readErr == nil {
+			t.Fatal("removed package node still forwarded")
+		}
+	}
+	plan.EdgeIDs = []string{}
+	browser.api("PUT", "/api/v1/plans/"+plan.ID, plan, &plan, 200)
+	if err = nodes[0].runtime.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = allowed.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err = allowed.Read(echo[:]); err == nil {
+		t.Fatal("package node removal kept existing stream")
+	}
+	if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("package removal failed to close active stream")
+	}
 	t.Logf("2 real edges/boots + 2 bound agents: shared concurrency=2, finite credit=%dB, persisted bidirectional payload=%dB, online zero-rate revocation passed", credit, used)
 }

@@ -598,7 +598,9 @@ export default function ACLPage() {
                 : "无匹配条目，默认允许全部流量；强制父策略仍然生效。"}
             </Alert>
           )}
-          <Typography>收紧策略可能中断现有连接。发布后由边缘应用。</Typography>
+          <Typography>
+            收紧策略可能中断现有连接。发布后由出口节点应用。
+          </Typography>
         </Confirm>
       )}
       {deleting && (

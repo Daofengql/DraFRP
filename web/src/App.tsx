@@ -6,14 +6,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Alert,
   AppBar,
   Box,
   Button,
-  Chip,
   CircularProgress,
   Collapse,
   Container,
@@ -27,7 +26,6 @@ import {
   ListItemText,
   MenuItem,
   Paper,
-  Stack,
   TextField,
   Toolbar,
   Typography,
@@ -81,9 +79,8 @@ const UsersPage = lazy(() =>
 const EdgesPage = lazy(() =>
   import("./pages/Admin").then((m) => ({ default: m.EdgesPage })),
 );
-const QuotasPage = lazy(() =>
-  import("./pages/Admin").then((m) => ({ default: m.QuotasPage })),
-);
+const PlansPage = lazy(() => import("./pages/Plans"));
+const AccountPage = lazy(() => import("./pages/Account"));
 const ACLPage = lazy(() => import("./pages/ACL"));
 
 declare const __BUILD_ID__: string;
@@ -98,13 +95,18 @@ type NavItem = {
   | { path?: never; children: NavLink[] }
 );
 const nav: NavItem[] = [
-  { id: "overview", path: "/", label: "概览", icon: <DashboardOutlinedIcon /> },
+  {
+    id: "overview",
+    path: "/",
+    label: "仪表盘",
+    icon: <DashboardOutlinedIcon />,
+  },
   {
     id: "connections",
     label: "连接管理",
     icon: <HubOutlinedIcon />,
     children: [
-      { path: "/devices", label: "设备" },
+      { path: "/devices", label: "客户端" },
       { path: "/rules", label: "TCP / UDP 隧道" },
       { path: "/sites", label: "HTTP(S) 站点" },
     ],
@@ -120,8 +122,11 @@ const nav: NavItem[] = [
   },
   {
     id: "usage",
-    path: "/usage",
-    label: "用量",
+    label: "我的账户",
+    children: [
+      { path: "/account", label: "账户与套餐" },
+      { path: "/usage", label: "流量用量" },
+    ],
     icon: <DataUsageOutlinedIcon />,
   },
   {
@@ -131,9 +136,9 @@ const nav: NavItem[] = [
     adminOnly: true,
     children: [
       { path: "/admin/overview", label: "平台概览" },
-      { path: "/admin/users", label: "用户与空间" },
-      { path: "/admin/edges", label: "边缘与端口池" },
-      { path: "/admin/quotas", label: "账号配额" },
+      { path: "/admin/users", label: "用户管理" },
+      { path: "/admin/edges", label: "出口节点与端口池" },
+      { path: "/admin/plans", label: "套餐管理" },
       { path: "/admin/acl", label: "TCP/UDP ACL 模板" },
       { path: "/admin/audit", label: "审计与系统" },
     ],
@@ -222,7 +227,7 @@ function Shell({
     );
   };
   const drawer = (
-    <Box sx={{ width: 244, py: 1 }} component="nav" aria-label="控制台导航">
+    <Box sx={{ width: 220, py: 1 }} component="nav" aria-label="控制台导航">
       <Typography
         sx={{ px: 3, py: 2 }}
         variant="h6"
@@ -290,7 +295,7 @@ function Shell({
           zIndex: (t) => (small ? t.zIndex.appBar : t.zIndex.drawer + 1),
         }}
       >
-        <Toolbar>
+        <Toolbar variant="dense">
           {small && (
             <IconButton
               onClick={() => setOpen(!open)}
@@ -311,10 +316,10 @@ function Shell({
           <TextField
             select
             size="small"
-            label="主题"
+            slotProps={{ select: { inputProps: { "aria-label": "主题" } } }}
             value={themeMode}
             onChange={(e) => onTheme(e.target.value)}
-            sx={{ width: 100, mr: 1 }}
+            sx={{ width: 116, mr: 1 }}
           >
             <MenuItem value="system">跟随系统</MenuItem>
             <MenuItem value="light">浅色</MenuItem>
@@ -339,8 +344,8 @@ function Shell({
         ModalProps={{ keepMounted: true }}
         sx={{
           "& .MuiDrawer-paper": {
-            top: small ? 0 : 64,
-            height: small ? "100%" : "calc(100% - 64px)",
+            top: small ? 0 : 48,
+            height: small ? "100%" : "calc(100% - 48px)",
           },
         }}
       >
@@ -348,20 +353,9 @@ function Shell({
       </Drawer>
       <Box
         component="main"
-        sx={{ ml: small ? 0 : "244px", pt: 10, px: { xs: 2, md: 4 }, pb: 6 }}
+        sx={{ ml: small ? 0 : "220px", pt: 8, px: { xs: 1.5, md: 2.5 }, pb: 3 }}
       >
-        <Container maxWidth="xl">
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            sx={{ mb: 2, overflowWrap: "anywhere" }}
-          >
-            <Chip size="small" label="当前空间" />
-            <Typography variant="body2" className="mono">
-              {session.user.tenant_id}
-            </Typography>
-          </Stack>
+        <Container maxWidth={false} disableGutters>
           {logout.error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {errorMessage(logout.error)}
@@ -428,12 +422,17 @@ function Authenticated({
         <Route path="/sites/:id" element={<RulePage />} />
         <Route path="/certificates" element={<CertificatesPage />} />
         <Route path="/usage" element={<UsagePage />} />
+        <Route path="/account" element={<AccountPage />} />
         {admin && (
           <>
             <Route path="/admin/overview" element={<OverviewPage platform />} />
             <Route path="/admin/users" element={<UsersPage />} />
             <Route path="/admin/edges" element={<EdgesPage />} />
-            <Route path="/admin/quotas" element={<QuotasPage />} />
+            <Route path="/admin/plans" element={<PlansPage />} />
+            <Route
+              path="/admin/quotas"
+              element={<Navigate to="/admin/plans" replace />}
+            />
             <Route path="/admin/acl" element={<ACLPage />} />
             <Route path="/admin/audit" element={<AuditPage />} />
           </>
@@ -491,9 +490,39 @@ export default function App() {
           primary: { main: "#258781" },
         },
         shape: { borderRadius: 8 },
-        typography: { fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif' },
+        typography: {
+          fontSize: 13,
+          fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif',
+        },
         components: {
-          MuiButton: { defaultProps: { disableElevation: true } },
+          MuiButton: {
+            defaultProps: { disableElevation: true, size: "small" },
+            styleOverrides: { root: { minWidth: 48, textTransform: "none" } },
+          },
+          MuiTextField: { defaultProps: { size: "small" } },
+          MuiFormControl: { defaultProps: { size: "small" } },
+          MuiCheckbox: { defaultProps: { size: "small" } },
+          MuiList: { defaultProps: { dense: true } },
+          MuiDialogTitle: {
+            styleOverrides: {
+              root: { fontSize: "1.1rem", padding: "16px 20px 12px" },
+            },
+          },
+          MuiDialogContent: {
+            styleOverrides: { root: { padding: "8px 20px 16px" } },
+          },
+          MuiDialogActions: {
+            styleOverrides: { root: { padding: "8px 20px 14px" } },
+          },
+          MuiTableCell: {
+            styleOverrides: {
+              root: { fontSize: "0.8125rem" },
+              head: { fontWeight: 600 },
+            },
+          },
+          MuiChip: {
+            styleOverrides: { sizeSmall: { height: 22, fontSize: "0.75rem" } },
+          },
           MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
         },
       }),

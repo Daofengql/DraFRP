@@ -24,10 +24,11 @@ type accountBudget struct {
 	upBucket, downBucket *limiter.Bucket
 	conns                *limiter.Connections
 	newFlows             *limiter.Flows
+	changed              chan struct{}
 }
 
 func newAccountBudget(g model.Grant) *accountBudget {
-	return &accountBudget{grant: g, upBucket: limiter.New(g), downBucket: limiter.New(g), conns: limiter.NewConnections(g.MaxConnections), newFlows: limiter.NewFlows(g.NewFlowsPerSecond)}
+	return &accountBudget{grant: g, changed: make(chan struct{}), upBucket: limiter.New(g), downBucket: limiter.New(g), conns: limiter.NewConnections(g.MaxConnections), newFlows: limiter.NewFlows(g.NewFlowsPerSecond)}
 }
 func (b *accountBudget) id() string { b.mu.Lock(); defer b.mu.Unlock(); return b.grant.ID }
 func (b *accountBudget) canUpdate(g model.Grant) error {
@@ -49,6 +50,7 @@ func (b *accountBudget) update(g model.Grant) error {
 	b.downBucket.Update(g)
 	b.conns.Update(g.MaxConnections)
 	b.newFlows.Update(g.NewFlowsPerSecond)
+	b.signalLocked()
 	return nil
 }
 
@@ -60,12 +62,12 @@ func (b *accountBudget) renewable(g model.Grant) bool {
 func (b *accountBudget) valid() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return !b.retired && time.Now().Before(b.grant.ExpiresAt) && b.grant.Bytes > b.upload+b.download && b.grant.BaseBPS != 0 && b.grant.PeakBPS != 0
+	return !b.retired && time.Now().Before(b.grant.ExpiresAt) && (b.grant.WaitForCredit || b.grant.Bytes > b.upload+b.download) && b.grant.BaseBPS != 0 && b.grant.PeakBPS != 0
 }
 func (b *accountBudget) acquire() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.retired || !time.Now().Before(b.grant.ExpiresAt) || b.grant.Bytes <= b.upload+b.download+b.held || b.grant.BaseBPS == 0 || b.grant.PeakBPS == 0 || !b.newFlows.Allow() {
+	if b.retired || !time.Now().Before(b.grant.ExpiresAt) || !b.grant.WaitForCredit && b.grant.Bytes <= b.upload+b.download+b.held || b.grant.BaseBPS == 0 || b.grant.PeakBPS == 0 || !b.newFlows.Allow() {
 		return false
 	}
 	if !b.conns.Acquire() {
@@ -82,20 +84,44 @@ func (b *accountBudget) release() {
 	}
 	b.mu.Unlock()
 }
-func (b *accountBudget) retire() { b.mu.Lock(); b.retired = true; b.mu.Unlock() }
+func (b *accountBudget) signalLocked() { close(b.changed); b.changed = make(chan struct{}) }
+func (b *accountBudget) retire()       { b.mu.Lock(); b.retired = true; b.signalLocked(); b.mu.Unlock() }
 func (b *accountBudget) reserve(n int, atomic bool) (int, error) {
+	return b.reserveContext(context.Background(), n, atomic)
+}
+
+func (b *accountBudget) reserveContext(ctx context.Context, n int, atomic bool) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.retired || !time.Now().Before(b.grant.ExpiresAt) {
-		return 0, errQuota
+	for {
+		if b.retired || !time.Now().Before(b.grant.ExpiresAt) || b.grant.BaseBPS == 0 || b.grant.PeakBPS == 0 {
+			return 0, errQuota
+		}
+		left := b.grant.Bytes - b.upload - b.download - b.held
+		if left > 0 && (!atomic || left >= int64(n)) {
+			count := int(min(int64(n), left))
+			b.held += int64(count)
+			return count, nil
+		}
+		if !b.grant.WaitForCredit {
+			return 0, errQuota
+		}
+		// The cloud acknowledges actual usage before extending excess credit.
+		// Keep the flow alive at the boundary; never invent local authority.
+		changed, expiry := b.changed, b.grant.ExpiresAt
+		b.mu.Unlock()
+		timer := time.NewTimer(time.Until(expiry))
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		case <-changed:
+		}
+		timer.Stop()
+		b.mu.Lock()
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 	}
-	left := b.grant.Bytes - b.upload - b.download - b.held
-	if left <= 0 || atomic && left < int64(n) {
-		return 0, errQuota
-	}
-	count := int(min(int64(n), left))
-	b.held += int64(count)
-	return count, nil
 }
 func (b *accountBudget) complete(reserved, written int, upload bool) {
 	b.mu.Lock()
@@ -106,6 +132,7 @@ func (b *accountBudget) complete(reserved, written int, upload bool) {
 	} else {
 		b.download += int64(written)
 	}
+	b.signalLocked()
 }
 func (b *accountBudget) report() model.Usage {
 	b.mu.Lock()
@@ -147,7 +174,7 @@ func (m *meteredStream) charge(n int, upload bool, write func(int) (int, error))
 	total := 0
 	for total < n {
 		size := min(n-total, 16<<10)
-		reserved, e := m.f.budget.reserve(size, false)
+		reserved, e := m.f.budget.reserveContext(m.f.ctx, size, false)
 		if e != nil {
 			return total, e
 		}
@@ -207,7 +234,7 @@ func (m *meteredStream) writePayload(p []byte) (int, error) {
 	total := 0
 	for len(p) > 0 {
 		size := min(len(p), 16<<10)
-		reserved, e := m.f.budget.reserve(size, false)
+		reserved, e := m.f.budget.reserveContext(m.f.ctx, size, false)
 		if e != nil {
 			return total, e
 		}
@@ -239,7 +266,31 @@ func (m *meteredStream) writePayload(p []byte) (int, error) {
 	return total, nil
 }
 func (r *Runtime) chargePacket(f *flowState, b []byte, upload bool, send func() error) error {
-	n, e := f.budget.reserve(len(b), true)
+	f.budget.mu.Lock()
+	renewable := f.budget.grant.WaitForCredit
+	f.budget.mu.Unlock()
+	if renewable {
+		// Meter accepted incoming payload before forwarding the whole datagram.
+		// A packet can straddle the final included byte: acknowledge that prefix,
+		// wait for cloud-authorized excess credit, then send one intact packet.
+		// Queues and the flow deadline bound payload waiting at this boundary.
+		ctx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+		defer cancel()
+		for left := len(b); left > 0; {
+			n, err := f.budget.reserveContext(ctx, left, false)
+			if err != nil {
+				return err
+			}
+			if !f.budget.wait(ctx, n, upload) || !r.waitCapacity(ctx, f.rule.TenantID, n) {
+				f.budget.complete(n, 0, upload)
+				return errQuota
+			}
+			f.budget.complete(n, n, upload)
+			left -= n
+		}
+		return send()
+	}
+	n, e := f.budget.reserveContext(f.ctx, len(b), true)
 	if e != nil {
 		return e
 	}

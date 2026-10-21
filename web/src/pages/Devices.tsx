@@ -67,16 +67,19 @@ export function BindPage() {
         DraFRP
       </Typography>
       <Paper variant="outlined" sx={{ p: 3 }}>
-        <PageTitle title="确认设备绑定" detail={`当前账号：${user.username}`} />
+        <PageTitle
+          title="确认客户端绑定"
+          detail={`当前账号：${user.username}`}
+        />
         {deviceID ? (
           <Stack spacing={2}>
-            <Alert severity="success">设备已绑定</Alert>
+            <Alert severity="success">客户端已绑定</Alert>
             <Button
               component={Link}
               to={`/devices/${deviceID}`}
               variant="contained"
             >
-              查看设备
+              查看客户端
             </Button>
           </Stack>
         ) : (
@@ -107,9 +110,9 @@ export function BindPage() {
                           : q.data.status
                     }
                   />
-                  <Alert severity="info">绑定信息须与 Agent 显示一致。</Alert>
+                  <Alert severity="info">核对客户端指纹。</Alert>
                   <TextField
-                    label="设备名称"
+                    label="客户端名称"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     inputProps={{ maxLength: 255 }}
@@ -133,7 +136,7 @@ export function BindPage() {
                 </>
               )}
               <Button component={Link} to="/devices">
-                返回设备
+                返回客户端
               </Button>
             </Stack>
           </Load>
@@ -176,8 +179,8 @@ export function DevicesPage() {
   return (
     <>
       <PageTitle
-        title="设备"
-        detail="设备绑定、会话状态与关联规则"
+        title="客户端"
+        detail="客户端绑定、会话状态与关联规则"
         action={
           <Button variant="contained" onClick={() => setBind(true)}>
             确认绑定
@@ -212,7 +215,9 @@ export function DevicesPage() {
       </Stack>
       <Load loading={q.isLoading} error={q.error}>
         {!rows.length ? (
-          <Empty title={q.data?.items.length ? "没有匹配设备" : "暂无设备"} />
+          <Empty
+            title={q.data?.items.length ? "没有匹配客户端" : "暂无客户端"}
+          />
         ) : (
           <TableFrame>
             <TableHead>
@@ -290,17 +295,17 @@ export function DevicesPage() {
       </Load>
       {revoking && (
         <Confirm
-          title={`撤销设备 ${revoking.name}`}
+          title={`撤销客户端 ${revoking.name}`}
           onClose={() => setRevoking(undefined)}
           busy={revoke.isPending}
           error={revoke.error}
-          label="撤销设备"
+          label="撤销客户端"
           onConfirm={() =>
             revoke.mutate({ path: `/devices/${revoking.id}`, method: "DELETE" })
           }
         >
           <Typography>
-            该设备的{" "}
+            该客户端的{" "}
             {rules.data?.items.filter((r) => r.device_id === revoking.id)
               .length ?? "未知数量"}{" "}
             条关联规则将停用，现有连接可能中断。再次使用需重新绑定。
@@ -313,11 +318,11 @@ export function DevicesPage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>重命名设备</DialogTitle>
+        <DialogTitle>重命名客户端</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
-              label="设备名称"
+              label="客户端名称"
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
@@ -349,12 +354,12 @@ export function DevicesPage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>绑定设备</DialogTitle>
+        <DialogTitle>绑定客户端</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
               label="用户码"
-              helperText="Agent 显示的用户码"
+              helperText="客户端 显示的用户码"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               autoFocus
@@ -369,7 +374,7 @@ export function DevicesPage() {
             disabled={!code.trim()}
             variant="contained"
           >
-            核对设备
+            核对客户端
           </Button>
         </DialogActions>
       </Dialog>
@@ -386,21 +391,21 @@ export function DevicePage() {
   return (
     <>
       <PageTitle
-        title={d?.name || "设备详情"}
+        title={d?.name || "客户端详情"}
         action={
           <Button component={Link} to="/devices">
-            返回设备
+            返回客户端
           </Button>
         }
       />
       <Load loading={devices.isLoading} error={devices.error}>
         {!d ? (
-          <Empty title="设备不存在或无权访问" />
+          <Empty title="客户端不存在或无权访问" />
         ) : (
           <Stack spacing={3}>
             <Paper variant="outlined" sx={{ p: 3 }}>
               <Box className="detail-grid">
-                <DetailField label="设备 ID">
+                <DetailField label="客户端 ID">
                   <Typography className="mono">{d.id}</Typography>
                 </DetailField>
                 <DetailField label="控制会话">
@@ -437,7 +442,7 @@ export function DevicePage() {
                 ? "支持"
                 : "未上报"}
             </Typography>
-            <Typography variant="h6">该设备的规则</Typography>
+            <Typography variant="h6">该客户端的规则</Typography>
             <Load loading={rules.isLoading} error={rules.error}>
               {!rows.length ? (
                 <Empty title="暂无关联规则" />

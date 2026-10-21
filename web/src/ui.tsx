@@ -81,14 +81,17 @@ export function useDraftGuard(dirty: boolean) {
 }
 
 const labels: Record<string, string> = {
-  ready: "承载已应用",
+  ready: "已应用",
   online: "近期在线",
   offline: "离线 / 观测过期",
-  pending: "已保存，等待应用",
+  pending: "待应用",
   deleting: "正在释放",
   disabled: "已停用",
   revoked: "已撤销",
   error: "应用失败",
+  plan_restricted: "套餐不可用",
+  waiting_for_agent: "等待客户端",
+  quota_exhausted: "套餐资源不足",
   capability_missing: "能力不足",
   healthy: "正常",
   unhealthy: "异常",
@@ -144,7 +147,7 @@ export function Empty({
   return (
     <Paper
       variant="outlined"
-      sx={{ p: 4, textAlign: "center", borderStyle: "dashed" }}
+      sx={{ p: 2.5, textAlign: "center", borderStyle: "dashed" }}
     >
       <Typography variant="h6">{title}</Typography>
       {detail && (
@@ -170,11 +173,11 @@ export function PageTitle({
       direction={{ xs: "column", sm: "row" }}
       justifyContent="space-between"
       alignItems={{ sm: "center" }}
-      spacing={2}
-      sx={{ mb: 3 }}
+      spacing={1.5}
+      sx={{ mb: 1.5 }}
     >
       <Box>
-        <Typography variant="h4" component="h1" fontWeight={700}>
+        <Typography variant="h5" component="h1" fontWeight={700}>
           {title}
         </Typography>
         {detail && (
@@ -210,7 +213,7 @@ export function Load({
       <Box
         role="status"
         aria-label="加载中"
-        sx={{ py: 8, textAlign: "center" }}
+        sx={{ py: 4, textAlign: "center" }}
       >
         <CircularProgress />
       </Box>

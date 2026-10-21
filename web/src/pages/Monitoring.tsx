@@ -12,7 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import { request } from "../api";
-import { fmtBytes, fmtDate, fmtLimit, fmtRate } from "../format";
+import { fmtBytes, fmtDate } from "../format";
 import {
   DetailField,
   Empty,
@@ -23,8 +23,8 @@ import {
   useResource,
   useSessionContext,
 } from "../ui";
-import type { Audit, Overview, Quota, Rule, System, Usage } from "../types";
-import ResourceQuotaUsage from "./ResourceQuotaUsage";
+import type { Audit, Overview, Rule, System, List } from "../types";
+import { PlanUsage, useAccount } from "./Account";
 
 export function SystemPanel() {
   const q = useQuery<System>({
@@ -64,86 +64,123 @@ export function SystemPanel() {
 
 export function OverviewPage({ platform = false }: { platform?: boolean }) {
   const { user } = useSessionContext();
+  const account = useAccount();
   const q = useQuery<Overview>({
     queryKey: ["overview", user.id, user.tenant_id, platform],
     queryFn: ({ signal }) =>
       request(platform ? "/overview?scope=platform" : "/overview", { signal }),
   });
   const rules = useResource<Rule>("/rules", "rules");
-  const issues =
-    rules.data?.items.filter(
-      (r) => r.enabled && !r.deleting && (r.last_error || r.status !== "ready"),
-    ) || [];
+  const items = rules.data?.items || [],
+    sites = items.filter(
+      (r) => ["http", "https"].includes(r.protocol) && !r.deleting,
+    );
+  const issues = items.filter(
+    (r) =>
+      r.enabled &&
+      !r.deleting &&
+      (r.plan_restricted || r.last_error || r.status !== "ready"),
+  );
   return (
     <>
       <PageTitle
-        title={platform ? "平台概览" : "概览"}
-        detail={
-          platform ? "平台节点与资源状态" : "当前空间的设备、隧道与业务用量"
+        title={platform ? "平台概览" : "仪表盘"}
+        action={
+          <Stack direction="row" spacing={1}>
+            <Button
+              onClick={() => {
+                void q.refetch();
+                void rules.refetch();
+                void account.refetch();
+              }}
+            >
+              刷新
+            </Button>
+            {!platform && (
+              <>
+                <Button component={Link} to="/sites?create=1">
+                  添加网站
+                </Button>
+                <Button
+                  variant="contained"
+                  component={Link}
+                  to="/rules?create=1"
+                >
+                  添加隧道
+                </Button>
+              </>
+            )}
+          </Stack>
         }
-        action={<Button onClick={() => q.refetch()}>刷新</Button>}
       />
       <Load loading={q.isPending} error={q.error}>
         {q.data && (
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit,minmax(165px,1fr))",
-              gap: 2,
-              mb: 3,
+              gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))",
+              gap: 1.5,
+              mb: 2,
             }}
           >
             {[
-              [
-                "控制会话在线",
-                `${q.data.online_devices} / ${q.data.devices}`,
-                "近期在线 / 设备总数",
-              ],
-              [
-                "规则应用",
-                `${q.data.ready_rules} / ${q.data.rules}`,
-                "承载已应用 / 总数",
-              ],
-              ["边缘", q.data.edges, "已登记节点"],
-              [
-                "上传",
-                fmtBytes(q.data.usage_upload_bytes),
-                "公网访问者 → 目标",
-              ],
-              [
-                "下载",
-                fmtBytes(q.data.usage_download_bytes),
-                "目标 → 公网访问者",
-              ],
-            ].map(([a, b, c]) => (
-              <Paper key={String(a)} variant="outlined" sx={{ p: 2.5 }}>
-                <Typography color="text.secondary">{a}</Typography>
-                <Typography variant="h5" fontWeight={700} sx={{ my: 1 }}>
-                  {b}
+              ["在线客户端", `${q.data.online_devices} / ${q.data.devices}`],
+              ["已应用服务", `${q.data.ready_rules} / ${q.data.rules}`],
+              ["出口节点", q.data.edges],
+              ["累计上传", fmtBytes(q.data.usage_upload_bytes)],
+              ["累计下载", fmtBytes(q.data.usage_download_bytes)],
+            ].map(([label, value]) => (
+              <Paper key={label} variant="outlined" sx={{ p: 1.5 }}>
+                <Typography variant="body2" color="text.secondary">
+                  {label}
                 </Typography>
-                <Typography variant="caption">{c}</Typography>
+                <Typography variant="h5" fontWeight={600} sx={{ mt: 0.5 }}>
+                  {value}
+                </Typography>
               </Paper>
             ))}
           </Box>
         )}
       </Load>
-      <Typography variant="h6" sx={{ mb: 1 }}>
-        当前空间待处理规则
-      </Typography>
+      {!platform && (
+        <Box sx={{ mb: 2 }}>
+          <Load loading={account.isPending} error={account.error}>
+            {account.data && <PlanUsage account={account.data} compact />}
+          </Load>
+        </Box>
+      )}
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mb: 1 }}
+      >
+        <Typography fontWeight={600}>待处理服务 · {issues.length}</Typography>
+        <Typography variant="body2" color="text.secondary">
+          隧道{" "}
+          {
+            items.filter(
+              (r) => !["http", "https"].includes(r.protocol) && !r.deleting,
+            ).length
+          }{" "}
+          · 网站 {sites.length}
+        </Typography>
+      </Stack>
       <Load loading={rules.isLoading} error={rules.error}>
         {!issues.length ? (
-          <Empty title="暂无待处理规则" />
+          <Empty title="暂无待处理服务" />
         ) : (
           <TableFrame>
             <TableHead>
               <TableRow>
-                <TableCell>名称</TableCell>
+                <TableCell>服务</TableCell>
+                <TableCell>协议</TableCell>
                 <TableCell>状态</TableCell>
                 <TableCell>原因</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {issues.map((r) => (
+              {issues.slice(0, 8).map((r) => (
                 <TableRow key={r.id}>
                   <TableCell>
                     <Button
@@ -153,18 +190,80 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
                       {r.name}
                     </Button>
                   </TableCell>
+                  <TableCell>{r.protocol.toUpperCase()}</TableCell>
                   <TableCell>
-                    <Status value={r.status} />
+                    <Status
+                      value={r.plan_restricted ? "plan_restricted" : r.status}
+                    />
                   </TableCell>
-                  <TableCell>{r.last_error || "等待边缘应用报告"}</TableCell>
+                  <TableCell>
+                    {r.plan_restricted
+                      ? "套餐未包含当前出口节点"
+                      : r.last_error || "等待出口节点应用"}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </TableFrame>
         )}
       </Load>
+      {!platform && items.length > 0 && (
+        <>
+          <Typography fontWeight={600} sx={{ mt: 2, mb: 1 }}>
+            最近服务
+          </Typography>
+          <TableFrame>
+            <TableHead>
+              <TableRow>
+                <TableCell>服务</TableCell>
+                <TableCell>目标</TableCell>
+                <TableCell>状态</TableCell>
+                <TableCell>操作</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.slice(0, 5).map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell>
+                    {r.name}{" "}
+                    <Typography
+                      component="span"
+                      variant="caption"
+                      color="text.secondary"
+                    >
+                      {r.protocol.toUpperCase()}
+                    </Typography>
+                  </TableCell>
+                  <TableCell className="mono">{r.target}</TableCell>
+                  <TableCell>
+                    <Status
+                      value={
+                        r.deleting
+                          ? "deleting"
+                          : r.plan_restricted
+                            ? "plan_restricted"
+                            : !r.enabled
+                              ? "disabled"
+                              : r.status
+                      }
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      component={Link}
+                      to={`/${["http", "https"].includes(r.protocol) ? "sites" : "rules"}/${r.id}`}
+                    >
+                      详情
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </TableFrame>
+        </>
+      )}
       {platform && (
-        <Box sx={{ mt: 3 }}>
+        <Box sx={{ mt: 2 }}>
           <SystemPanel />
         </Box>
       )}
@@ -173,104 +272,77 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
 }
 
 export function UsagePage() {
-  const q = useResource<Usage>("/usage", "usage"),
-    quotas = useResource<Quota>("/quotas", "quotas");
+  type NodeUsage = {
+    edge_id: string;
+    edge_name: string;
+    upload_bytes: number;
+    download_bytes: number;
+    observed_at: string;
+  };
   const { user } = useSessionContext();
-  const quota = quotas.data?.items.find((x) => x.tenant_id === user.tenant_id);
+  const q = useQuery<List<NodeUsage>>({
+    queryKey: ["usage", user.id, user.tenant_id, "summary"],
+    queryFn: ({ signal }) => request("/usage-summary", { signal }),
+  });
+  const rows = q.data?.items || [];
+  const up = rows.reduce((n, r) => n + r.upload_bytes, 0),
+    down = rows.reduce((n, r) => n + r.download_bytes, 0);
   return (
     <>
       <PageTitle
-        title="账号共享用量"
-        detail="空间共享配额与业务用量"
-        action={
-          <Button
-            onClick={() => {
-              void q.refetch();
-              void quotas.refetch();
-            }}
-          >
-            刷新统计
-          </Button>
-        }
+        title="流量用量"
+        action={<Button onClick={() => q.refetch()}>刷新</Button>}
       />
-      <Load loading={quotas.isLoading} error={quotas.error}>
-        {quota && (
-          <>
-            <Paper variant="outlined" sx={{ p: 3, mb: 3 }}>
-              <Box className="detail-grid">
-                <DetailField label="基准 / 峰值速率">
-                  {fmtRate(quota.base_bps)} / {fmtRate(quota.peak_bps)}
-                </DetailField>
-                <DetailField label="突发信用预算">
-                  {fmtBytes(quota.burst_bytes)}
-                </DetailField>
-                <DetailField label="并发 / 每秒新流">
-                  {fmtLimit(quota.max_connections)} /{" "}
-                  {fmtLimit(quota.new_flows_per_second)}
-                </DetailField>
-                <DetailField label="周期计量 / 周期上限">
-                  {fmtBytes(quota.used_bytes)} /{" "}
-                  {quota.period_bytes === 0
-                    ? "禁止 (0 B)"
-                    : fmtBytes(quota.period_bytes)}
-                </DetailField>
-                <DetailField label="已预留给边缘">
-                  {fmtBytes(quota.reserved_bytes)}
-                </DetailField>
-                <DetailField label="流量周期">
-                  {quota.period_seconds
-                    ? `${quota.period_seconds.toLocaleString("zh-CN")} 秒`
-                    : "不限期"}{" "}
-                  · {quota.period_id || "未记录"}
-                </DetailField>
-                <DetailField label="周期开始 / 到期">
-                  {fmtDate(quota.period_started_at)} /{" "}
-                  {quota.period_seconds
-                    ? fmtDate(quota.period_ends_at)
-                    : "不限期"}
-                </DetailField>
-                <DetailField label="窗口平均速率 / 当前剩余信用">
-                  未上报
-                </DetailField>
-              </Box>
+      <Load loading={q.isPending} error={q.error}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))",
+            gap: 1.5,
+            mb: 2,
+          }}
+        >
+          {[
+            ["累计上传", up],
+            ["累计下载", down],
+            ["总流量", up + down],
+          ].map(([label, value]) => (
+            <Paper key={label} variant="outlined" sx={{ p: 1.5 }}>
+              <Typography variant="body2" color="text.secondary">
+                {label}
+              </Typography>
+              <Typography variant="h5" fontWeight={600} sx={{ mt: 0.5 }}>
+                {fmtBytes(Number(value))}
+              </Typography>
             </Paper>
-            <ResourceQuotaUsage quota={quota} />
-          </>
-        )}
-      </Load>
-      <Typography variant="h6" sx={{ mb: 2 }}>
-        边缘累计业务用量
-      </Typography>
-      <Load loading={q.isLoading} error={q.error}>
-        {!q.data?.items.length ? (
+          ))}
+        </Box>
+        <Typography fontWeight={600} sx={{ mb: 1 }}>
+          出口节点用量
+        </Typography>
+        {!rows.length ? (
           <Empty title="暂无用量统计" />
         ) : (
           <TableFrame>
             <TableHead>
               <TableRow>
-                <TableCell>边缘 / 授权</TableCell>
-                <TableCell>上传：访问者 → 目标</TableCell>
-                <TableCell>下载：目标 → 访问者</TableCell>
-                <TableCell>批次 / 状态</TableCell>
-                <TableCell>观测截至</TableCell>
+                <TableCell>出口节点</TableCell>
+                <TableCell>上传</TableCell>
+                <TableCell>下载</TableCell>
+                <TableCell>总流量</TableCell>
+                <TableCell>最近上报</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {q.data.items.map((u) => (
-                <TableRow key={`${u.grant_id}/${u.sequence}`}>
+              {rows.map((r) => (
+                <TableRow key={r.edge_id}>
+                  <TableCell>{r.edge_name || "已移除节点"}</TableCell>
+                  <TableCell>{fmtBytes(r.upload_bytes)}</TableCell>
+                  <TableCell>{fmtBytes(r.download_bytes)}</TableCell>
                   <TableCell>
-                    <Typography className="mono">{u.edge_id}</Typography>
-                    <Typography variant="caption" className="mono">
-                      {u.grant_id}
-                    </Typography>
+                    {fmtBytes(r.upload_bytes + r.download_bytes)}
                   </TableCell>
-                  <TableCell>{fmtBytes(u.upload_bytes)}</TableCell>
-                  <TableCell>{fmtBytes(u.download_bytes)}</TableCell>
-                  <TableCell>
-                    {u.sequence} ·{" "}
-                    <Status value={u.closed ? "closed" : "active"} />
-                  </TableCell>
-                  <TableCell>{fmtDate(u.observed_at)}</TableCell>
+                  <TableCell>{fmtDate(r.observed_at)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

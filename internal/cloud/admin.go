@@ -23,6 +23,20 @@ func (s *Server) edges(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 503, "database_unavailable", e.Error())
 			return
 		}
+		if !isAdmin(r) {
+			q, err := readQuota(r.Context(), s.store(r.Context()), tenant(r), false)
+			if err != nil {
+				apiErr(w, 503, "database_unavailable", err.Error())
+				return
+			}
+			filtered := []model.Edge{}
+			for _, edge := range items {
+				if edgeAllowed(q, edge.ID) {
+					filtered = append(filtered, edge)
+				}
+			}
+			items = filtered
+		}
 		writeJSON(w, 200, map[string]any{"items": items, "total": len(items)})
 		return
 	}
@@ -118,6 +132,12 @@ func (s *Server) edge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if r.Method == "DELETE" {
+		if _, err := lockPlanSettings(r.Context(), tx); err != nil {
+			apiErr(w, 503, "database_unavailable", err.Error())
+			return
+		}
+	}
 	var found string
 	if e = tx.QueryRowContext(r.Context(), "SELECT id FROM edges WHERE id=? FOR UPDATE", eid).Scan(&found); e != nil {
 		apiErr(w, 404, "not_found", "edge not found")
@@ -142,6 +162,14 @@ func (s *Server) edge(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "DELETE":
+		if e = tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM plans WHERE all_edges=0 AND JSON_CONTAINS(edge_ids,JSON_QUOTE(?))", eid).Scan(&n); e != nil {
+			apiErr(w, 503, "database_unavailable", e.Error())
+			return
+		}
+		if n > 0 {
+			apiErr(w, 409, "edge_in_use", "出口节点已包含在套餐中")
+			return
+		}
 		_, e = tx.ExecContext(r.Context(), "DELETE FROM edges WHERE id=?", eid)
 	case "PUT":
 		var in model.Edge
@@ -561,6 +589,18 @@ func (s *Server) quota(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, 409, "version_conflict", "quota changed")
 		return
 	}
+	if old.PlanID != "" {
+		p, err := readPlan(r.Context(), tx, old.PlanID)
+		if err != nil {
+			apiErr(w, 503, "database_unavailable", err.Error())
+			return
+		}
+		if !p.Legacy {
+			apiErr(w, 409, "plan_managed", "资源权限由套餐管理")
+			return
+		}
+	}
+	q.PlanID, q.AllowedEdgeIDs, q.MaxSites = old.PlanID, old.AllowedEdgeIDs, old.MaxSites
 	q.MaxDevices, q.MaxRules, q.MaxPorts, q.MaxDomains = old.MaxDevices, old.MaxRules, old.MaxPorts, old.MaxDomains
 	for _, item := range []struct {
 		value *int
@@ -619,7 +659,7 @@ func (s *Server) quota(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT id,tenant_id,username,role,disabled FROM users ORDER BY username")
+		rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT u.id,u.tenant_id,u.username,u.role,u.disabled,u.created_at,COALESCE(q.plan_id,''),COALESCE(p.name,'') FROM users u LEFT JOIN quotas q ON q.tenant_id=u.tenant_id LEFT JOIN plans p ON p.id=q.plan_id ORDER BY u.username")
 		if e != nil {
 			apiErr(w, 503, "database_unavailable", e.Error())
 			return
@@ -628,7 +668,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		out := []model.User{}
 		for rows.Next() {
 			var u model.User
-			if e = rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.Role, &u.Disabled); e != nil {
+			if e = rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.Role, &u.Disabled, &u.CreatedAt, &u.PlanID, &u.PlanName); e != nil {
 				apiErr(w, 503, "database_unavailable", e.Error())
 				return
 			}
@@ -641,10 +681,11 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
-		TenantID string `json:"tenant_id"`
+		Username string  `json:"username"`
+		Password string  `json:"password"`
+		Role     string  `json:"role"`
+		TenantID string  `json:"tenant_id"`
+		PlanID   *string `json:"plan_id"`
 	}
 	if e := readJSON(w, r, &in); e != nil || strings.TrimSpace(in.Username) == "" || len(in.Username) > 255 || len(in.Password) < 10 || len(in.Password) > 72 || !validRole(in.Role) {
 		apiErr(w, 400, "invalid_user", "username, role, and a 10..72 byte password are required")
@@ -672,6 +713,13 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 503, "database_unavailable", e.Error())
 			return
 		}
+		if e = initializeAccountPlan(r.Context(), tx, tid, in.PlanID); e != nil {
+			apiErr(w, 400, "invalid_plan", "套餐不存在或无法分配")
+			return
+		}
+	} else if in.PlanID != nil {
+		apiErr(w, 400, "shared_plan", "共享空间的套餐由空间统一分配")
+		return
 	}
 	u := model.User{ID: id(), TenantID: tid, Username: in.Username, Role: in.Role}
 	if _, e = tx.ExecContext(r.Context(), "INSERT INTO users(id,tenant_id,username,password_hash,role,created_at) VALUES(?,?,?,?,?,?)", u.ID, tid, u.Username, string(pw), u.Role, now()); e != nil {
