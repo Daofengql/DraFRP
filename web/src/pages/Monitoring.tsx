@@ -336,7 +336,9 @@ export function UsagePage() {
             <TableBody>
               {rows.map((r) => (
                 <TableRow key={r.edge_id}>
-                  <TableCell>{r.edge_name || "已移除节点"}</TableCell>
+                  <TableCell title={r.edge_id}>
+                    {r.edge_name || `已移除节点 · ${r.edge_id.slice(0, 8)}`}
+                  </TableCell>
                   <TableCell>{fmtBytes(r.upload_bytes)}</TableCell>
                   <TableCell>{fmtBytes(r.download_bytes)}</TableCell>
                   <TableCell>

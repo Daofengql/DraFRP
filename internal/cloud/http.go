@@ -364,7 +364,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var up, down int64
-	if e := s.store(r.Context()).QueryRowContext(r.Context(), "SELECT COALESCE(SUM(upload_bytes),0),COALESCE(SUM(download_bytes),0) FROM usage_table WHERE "+filter, args...).Scan(&up, &down); e != nil {
+	if e := s.store(r.Context()).QueryRowContext(r.Context(), "SELECT COALESCE(SUM(upload_bytes),0),COALESCE(SUM(download_bytes),0) FROM usage_table u JOIN grants_table g ON g.id=u.grant_id WHERE "+strings.ReplaceAll(filter, "tenant_id", "g.tenant_id"), args...).Scan(&up, &down); e != nil {
 		apiErr(w, 503, "database_unavailable", "could not read usage totals")
 		return
 	}

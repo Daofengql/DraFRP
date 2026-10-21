@@ -36,7 +36,7 @@ try {
     $exampleOutput = Join-Path $outputDir 'examples'
     New-Item -ItemType Directory -Force $exampleOutput | Out-Null
     Copy-Item -Path examples/* -Destination $exampleOutput -Recurse -Force
-    Copy-Item -LiteralPath README.md, IMPLEMENTATION.md, API-CONTRACT.md -Destination $outputDir -Force
+    Copy-Item -LiteralPath README.md, IMPLEMENTATION.md, API-CONTRACT.md, SCHEMA-INTEGRITY.md -Destination $outputDir -Force
     Get-ChildItem -Path (Join-Path $outputDir 'drafrp-*') -File | Sort-Object Name | ForEach-Object {
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $($_.Name)"

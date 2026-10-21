@@ -556,7 +556,7 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 	} else if q.PeriodBytes >= 0 && q.UsedBytes >= q.PeriodBytes {
 		base, peak, burst = 0, 0, 0
 	}
-	rows, e := tx.QueryContext(ctx, "SELECT id,tenant_id,edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,used FROM grants_table WHERE tenant_id=? AND closed=0", tid)
+	rows, e := tx.QueryContext(ctx, "SELECT id,tenant_id,COALESCE(edge_id,''),boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,used FROM grants_table WHERE tenant_id=? AND closed=0", tid)
 	if e != nil {
 		return model.Grant{}, e
 	}
@@ -687,7 +687,7 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 	}
 	g := model.Grant{ID: id(), TenantID: tid, EdgeID: eid, BootID: boot, ExpiresAt: grantExpiry(q, s.cfg.SnapshotTTL), Bytes: bytes, PolicyVersion: q.Version, PeriodID: q.PeriodID, WaitForCredit: waitForCredit,
 		BaseBPS: share(base, "", true, func(g model.Grant) int64 { return g.BaseBPS }), PeakBPS: share(peak, "", true, func(g model.Grant) int64 { return g.PeakBPS }), BurstBytes: share(burst, "", true, func(g model.Grant) int64 { return g.BurstBytes }), MaxConnections: int(share(int64(q.MaxConnections), "", false, func(g model.Grant) int64 { return int64(g.MaxConnections) })), NewFlowsPerSecond: int(share(int64(q.NewFlowsPerSecond), "", false, func(g model.Grant) int64 { return int64(g.NewFlowsPerSecond) }))}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO grants_table(id,tenant_id,edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,reserved,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", g.ID, tid, eid, boot, g.ExpiresAt, bytes, g.BaseBPS, g.PeakBPS, g.BurstBytes, g.MaxConnections, g.NewFlowsPerSecond, g.PolicyVersion, g.PeriodID, bytes, now()); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO grants_table(id,tenant_id,edge_id,issued_edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,policy_version,period_id,reserved,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", g.ID, tid, eid, eid, boot, g.ExpiresAt, bytes, g.BaseBPS, g.PeakBPS, g.BurstBytes, g.MaxConnections, g.NewFlowsPerSecond, g.PolicyVersion, g.PeriodID, bytes, now()); e != nil {
 		return model.Grant{}, e
 	}
 	if _, e = tx.ExecContext(ctx, "UPDATE quotas SET reserved_bytes=reserved_bytes+? WHERE tenant_id=?", bytes, tid); e != nil {
@@ -755,7 +755,7 @@ func (s *Server) settleUsage(ctx context.Context, u model.Usage, eid, boot strin
 	if wasClosed && (u.UploadBytes != up || u.DownloadBytes != down) {
 		return errors.New("closed grant totals cannot change")
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO usage_table(grant_id,tenant_id,edge_id,boot_id,sequence_no,upload_bytes,download_bytes,closed,observed_at) VALUES(?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE sequence_no=VALUES(sequence_no),upload_bytes=VALUES(upload_bytes),download_bytes=VALUES(download_bytes),closed=VALUES(closed),observed_at=VALUES(observed_at)", u.GrantID, tid, eid, boot, u.Sequence, u.UploadBytes, u.DownloadBytes, u.Closed, now()); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO usage_table(grant_id,sequence_no,upload_bytes,download_bytes,closed,observed_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE sequence_no=VALUES(sequence_no),upload_bytes=VALUES(upload_bytes),download_bytes=VALUES(download_bytes),closed=VALUES(closed),observed_at=VALUES(observed_at)", u.GrantID, u.Sequence, u.UploadBytes, u.DownloadBytes, u.Closed, now()); e != nil {
 		return e
 	}
 	if !stopped {

@@ -42,7 +42,7 @@ func resourceCount(ctx context.Context, db sqlStore, tenantID, kind string) (int
 	case "ports":
 		// The same number in TCP and UDP counts as two public resources. Old
 		// reservations remain charged until their ACK or expiry reclamation.
-		query = "SELECT COUNT(*) FROM resource_claims c WHERE c.tenant_id=? AND (c.resource_key LIKE 'tcp/%' OR c.resource_key LIKE 'udp/%') AND (c.release_at IS NULL OR c.release_at>?)"
+		query = "SELECT COUNT(*) FROM resource_claims c WHERE c.tenant_id <=> NULLIF(?,'') AND (c.resource_key LIKE 'tcp/%' OR c.resource_key LIKE 'udp/%') AND (c.release_at IS NULL OR c.release_at>?)"
 	default:
 		return 0, errors.New("unknown configuration resource kind")
 	}
@@ -57,17 +57,15 @@ func resourceCount(ctx context.Context, db sqlStore, tenantID, kind string) (int
 
 func resourceUsage(ctx context.Context, db sqlStore, tenantID string) (*model.ResourceUsage, error) {
 	u := &model.ResourceUsage{ObservedAt: now()}
-	for _, item := range []struct {
-		kind  string
-		value *int64
-	}{
-		{"devices", &u.Devices}, {"rules", &u.Rules}, {"ports", &u.Ports}, {"domains", &u.Domains}, {"sites", &u.Sites},
-	} {
-		var err error
-		*item.value, err = resourceCount(ctx, db, tenantID, item.kind)
-		if err != nil {
-			return nil, err
-		}
+	// One statement gives a consistent observation without five round trips.
+	err := db.QueryRowContext(ctx, `SELECT
+  (SELECT COUNT(*) FROM devices WHERE tenant_id=? AND revoked=0),
+  (SELECT COUNT(*) FROM rules WHERE tenant_id=?),
+  (SELECT COUNT(*) FROM resource_claims WHERE tenant_id=? AND (resource_key LIKE 'tcp/%' OR resource_key LIKE 'udp/%') AND (release_at IS NULL OR release_at>?)),
+  (SELECT COUNT(*) FROM domains WHERE tenant_id=?),
+  (SELECT COUNT(*) FROM rules WHERE tenant_id=? AND protocol IN ('http','https'))`, tenantID, tenantID, tenantID, u.ObservedAt, tenantID, tenantID).Scan(&u.Devices, &u.Rules, &u.Ports, &u.Domains, &u.Sites)
+	if err != nil {
+		return nil, err
 	}
 	return u, nil
 }

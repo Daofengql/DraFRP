@@ -34,35 +34,29 @@ func (s *Server) loadDomain(ctx context.Context, tid, did string, lock bool) (ve
 }
 func (s *Server) domains(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT id FROM domains WHERE tenant_id=? ORDER BY created_at DESC", tenant(r))
+		rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT id,domain,status,challenge,verified_at,created_at FROM domains WHERE tenant_id=? ORDER BY created_at DESC", tenant(r))
 		if e != nil {
 			apiErr(w, 503, "database_unavailable", e.Error())
 			return
 		}
-		ids := []string{}
+		defer rows.Close()
+		out := []verifiedDomain{}
 		for rows.Next() {
-			var id string
-			if e = rows.Scan(&id); e != nil {
-				rows.Close()
+			var d verifiedDomain
+			var verified sql.NullTime
+			if e = rows.Scan(&d.ID, &d.Domain, &d.Status, &d.TXTValue, &verified, &d.CreatedAt); e != nil {
 				apiErr(w, 503, "database_unavailable", e.Error())
 				return
 			}
-			ids = append(ids, id)
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
-			apiErr(w, 503, "database_unavailable", e.Error())
-			return
-		}
-		out := []verifiedDomain{}
-		for _, id := range ids {
-			d, e := s.loadDomain(r.Context(), tenant(r), id, false)
-			if e != nil {
-				apiErr(w, 503, "database_unavailable", e.Error())
-				return
+			d.TXTName = "_drafrp-challenge." + d.Domain
+			if verified.Valid {
+				d.VerifiedAt = &verified.Time
 			}
 			out = append(out, d)
+		}
+		if e = rows.Err(); e != nil {
+			apiErr(w, 503, "database_unavailable", e.Error())
+			return
 		}
 		writeJSON(w, 200, map[string]any{"items": out, "total": len(out)})
 		return
@@ -193,10 +187,6 @@ func (s *Server) domain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, e = s.store(r.Context()).ExecContext(r.Context(), "DELETE FROM domains WHERE id=?", d.ID); e != nil {
-		apiErr(w, 503, "database_unavailable", e.Error())
-		return
-	}
-	if _, e = s.store(r.Context()).ExecContext(r.Context(), "DELETE FROM domain_ownership WHERE domain=? AND tenant_id=?", d.Domain, tenant(r)); e != nil {
 		apiErr(w, 503, "database_unavailable", e.Error())
 		return
 	}

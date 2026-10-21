@@ -162,12 +162,20 @@ func (s *Server) edge(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "DELETE":
-		if e = tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM plans WHERE all_edges=0 AND JSON_CONTAINS(edge_ids,JSON_QUOTE(?))", eid).Scan(&n); e != nil {
+		if e = tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM plan_edges WHERE edge_id=?", eid).Scan(&n); e != nil {
 			apiErr(w, 503, "database_unavailable", e.Error())
 			return
 		}
 		if n > 0 {
 			apiErr(w, 409, "edge_in_use", "出口节点已包含在套餐中")
+			return
+		}
+		if e = s.prepareEdgeDeletion(r.Context(), tx, eid); e != nil {
+			if errors.Is(e, errEdgeLeases) {
+				apiErr(w, 409, "edge_in_use", e.Error())
+			} else {
+				apiErr(w, 503, "database_unavailable", e.Error())
+			}
 			return
 		}
 		_, e = tx.ExecContext(r.Context(), "DELETE FROM edges WHERE id=?", eid)
@@ -737,7 +745,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, "GET") {
 		return
 	}
-	rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT grant_id,edge_id,boot_id,sequence_no,upload_bytes,download_bytes,closed,observed_at FROM usage_table WHERE tenant_id=? ORDER BY observed_at DESC LIMIT 1000", tenant(r))
+	rows, e := s.store(r.Context()).QueryContext(r.Context(), "SELECT u.grant_id,g.issued_edge_id,g.boot_id,u.sequence_no,u.upload_bytes,u.download_bytes,u.closed,u.observed_at FROM usage_table u JOIN grants_table g ON g.id=u.grant_id WHERE g.tenant_id=? ORDER BY u.observed_at DESC LIMIT 1000", tenant(r))
 	if e != nil {
 		apiErr(w, 503, "database_unavailable", e.Error())
 		return

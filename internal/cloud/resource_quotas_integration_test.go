@@ -217,10 +217,16 @@ func TestMySQLResourceQuotaRuleAndOrphanPortLifecycle(t *testing.T) {
 	// Simulate the previous schema: one claim still has a rule and the old
 	// moved claim only retains its creation audit. Both owners must survive an
 	// additive, repeatable migration, along with the account's saved limits.
-	if _, err := f.s.db.Exec("UPDATE resource_claims SET tenant_id='' WHERE tenant_id=?", b.user.TenantID); err != nil {
+	if _, err := f.s.db.Exec("UPDATE resource_claims SET tenant_id=NULL WHERE tenant_id=?", b.user.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.db.Exec("ALTER TABLE resource_claims DROP FOREIGN KEY fk_claims_tenant"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.db.Exec("ALTER TABLE resource_claims DROP INDEX owner_release"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.db.Exec("DELETE FROM schema_migrations WHERE version='20261021_relational_integrity'"); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {

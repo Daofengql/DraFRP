@@ -4,6 +4,8 @@ DraFRP 是包含云控、共享出口节点和客户端的内网映射服务。�
 
 当前可运行 TCP、UDP 和 HTTP(S) 映射，QUIC 优先、TLS/yamux 回退。已完成真实 MySQL 和三端网络联调；验证范围、尚未完成的设计项在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。七份设计文档仍是目标规格，不代表每项均已交付。
 
+MySQL 的外键、删除动作、历史账本和升级恢复策略见 [SCHEMA-INTEGRITY.md](SCHEMA-INTEGRITY.md)。
+
 ## 构建
 
 需要 Go 1.26.10 或更新的安全补丁版本、Node.js 24 和 npm；go.mod 固定当前验证的工具链。正式构建将 Vite 产物嵌入云控，出口节点和客户端不携带前端资源。

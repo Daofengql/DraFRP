@@ -11,18 +11,20 @@ import (
 	"time"
 )
 
-const planColumns = "id,name,bandwidth_bps,max_ports,max_sites,all_edges,edge_ids,version,legacy,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps"
+const planColumns = "p.id,name,bandwidth_bps,max_ports,max_sites,all_edges,COALESCE((SELECT JSON_ARRAYAGG(pe.edge_id) FROM plan_edges pe WHERE pe.plan_id=p.id),JSON_ARRAY()),version,legacy,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps"
 
 func readPlan(ctx context.Context, db sqlStore, pid string) (model.Plan, error) {
-	return scanPlan(db.QueryRowContext(ctx, "SELECT "+planColumns+" FROM plans WHERE id=?", pid))
+	return scanPlan(db.QueryRowContext(ctx, "SELECT "+planColumns+" FROM plans p WHERE p.id=?", pid))
 }
 
-func scanPlan(row interface{ Scan(...any) error }) (model.Plan, error) {
+func scanPlan(row interface{ Scan(...any) error }, extra ...any) (model.Plan, error) {
 	var p model.Plan
 	var edges string
-	err := row.Scan(&p.ID, &p.Name, &p.BandwidthBPS, &p.MaxPorts, &p.MaxSites, &p.AllEdges, &edges, &p.Version, &p.Legacy, &p.BurstEnabled, &p.BurstBPS, &p.BurstSeconds, &p.TrafficMetered, &p.TrafficBytes, &p.PeriodSeconds, &p.OverageAction, &p.OverageBPS)
+	dest := []any{&p.ID, &p.Name, &p.BandwidthBPS, &p.MaxPorts, &p.MaxSites, &p.AllEdges, &edges, &p.Version, &p.Legacy, &p.BurstEnabled, &p.BurstBPS, &p.BurstSeconds, &p.TrafficMetered, &p.TrafficBytes, &p.PeriodSeconds, &p.OverageAction, &p.OverageBPS}
+	err := row.Scan(append(dest, extra...)...)
 	if err == nil {
 		decodeJSON(edges, &p.EdgeIDs)
+		slices.Sort(p.EdgeIDs)
 	}
 	return p, err
 }
@@ -31,7 +33,7 @@ func scanPlan(row interface{ Scan(...any) error }) (model.Plan, error) {
 // Admissions/runtime need only the tenant lock and its effective policy copy.
 func lockPlanSettings(ctx context.Context, db sqlStore) (string, error) {
 	var pid string
-	err := db.QueryRowContext(ctx, "SELECT default_plan_id FROM plan_settings WHERE id=1 FOR UPDATE").Scan(&pid)
+	err := db.QueryRowContext(ctx, "SELECT COALESCE(default_plan_id,'') FROM plan_settings WHERE id=1 FOR UPDATE").Scan(&pid)
 	return pid, err
 }
 
@@ -46,13 +48,13 @@ func migratePlans(ctx context.Context, db *sql.DB) error {
 	}
 	// NULL distinguishes untouched pre-package rows from explicitly unassigned
 	// new accounts ([]). Preserve legacy rate/period settings without reapplying.
-	_, err = tx.ExecContext(ctx, `INSERT IGNORE INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,edge_ids,legacy,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps,created_at,updated_at)
-		SELECT SHA2(CONCAT('legacy-plan:',q.tenant_id),256),CONCAT('迁移套餐 · ',LEFT(t.name,64)),q.base_bps,q.max_ports,q.max_sites,1,JSON_ARRAY(),1,q.base_bps>0 AND q.peak_bps>q.base_bps,q.peak_bps,IF(q.peak_bps>q.base_bps,GREATEST(1,CEIL(q.burst_bytes*8/(q.peak_bps-q.base_bps))),0),q.period_bytes>=0,GREATEST(0,q.period_bytes),q.period_seconds,q.overage_action,q.overage_bps,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
-		FROM quotas q JOIN tenants t ON t.id=q.tenant_id WHERE q.plan_id='' AND q.allowed_edge_ids IS NULL`)
+	_, err = tx.ExecContext(ctx, `INSERT IGNORE INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,legacy,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps,created_at,updated_at)
+		SELECT SHA2(CONCAT('legacy-plan:',q.tenant_id),256),CONCAT('迁移套餐 · ',LEFT(t.name,64)),q.base_bps,q.max_ports,q.max_sites,1,1,q.base_bps>0 AND q.peak_bps>q.base_bps,q.peak_bps,IF(q.peak_bps>q.base_bps,GREATEST(1,CEIL(q.burst_bytes*8/(q.peak_bps-q.base_bps))),0),q.period_bytes>=0,GREATEST(0,q.period_bytes),q.period_seconds,q.overage_action,q.overage_bps,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
+		FROM quotas q JOIN tenants t ON t.id=q.tenant_id WHERE COALESCE(q.plan_id,'')='' AND q.allowed_edge_ids IS NULL`)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE quotas SET plan_id=SHA2(CONCAT('legacy-plan:',tenant_id),256) WHERE plan_id='' AND allowed_edge_ids IS NULL`); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE quotas SET plan_id=SHA2(CONCAT('legacy-plan:',tenant_id),256) WHERE COALESCE(plan_id,'')='' AND allowed_edge_ids IS NULL`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -102,7 +104,7 @@ func applyPlan(ctx context.Context, db sqlStore, tid string, p *model.Plan) erro
 			}
 		}
 	}
-	_, err = db.ExecContext(ctx, "UPDATE quotas SET plan_id=?,allowed_edge_ids=?,base_bps=?,peak_bps=?,burst_bytes=?,max_ports=?,max_sites=?,max_devices=-1,max_rules=-1,max_domains=-1,max_connections=-1,new_flows_per_second=-1,period_bytes=?,period_seconds=?,period_started_at=?,period_ends_at=?,overage_action=?,overage_bps=?,version=version+1,updated_at=? WHERE tenant_id=?", pid, edges, bandwidth, peak, burst, ports, sites, periodBytes, periodSeconds, q.PeriodStartedAt, sqlTime(q.PeriodEndsAt), action, overageBPS, now(), tid)
+	_, err = db.ExecContext(ctx, "UPDATE quotas SET plan_id=NULLIF(?,''),allowed_edge_ids=?,base_bps=?,peak_bps=?,burst_bytes=?,max_ports=?,max_sites=?,max_devices=-1,max_rules=-1,max_domains=-1,max_connections=-1,new_flows_per_second=-1,period_bytes=?,period_seconds=?,period_started_at=?,period_ends_at=?,overage_action=?,overage_bps=?,version=version+1,updated_at=? WHERE tenant_id=?", pid, edges, bandwidth, peak, burst, ports, sites, periodBytes, periodSeconds, q.PeriodStartedAt, sqlTime(q.PeriodEndsAt), action, overageBPS, now(), tid)
 	if err != nil {
 		return err
 	}
@@ -197,14 +199,17 @@ func validatePlan(ctx context.Context, db sqlStore, p *model.Plan) error {
 func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 	ctx, db := r.Context(), s.store(r.Context())
 	if r.Method == "GET" {
-		rows, err := db.QueryContext(ctx, "SELECT "+planColumns+" FROM plans ORDER BY created_at,id")
+		rows, err := db.QueryContext(ctx, "SELECT "+planColumns+",p.id=COALESCE(ps.default_plan_id,''),(SELECT COUNT(*) FROM quotas q WHERE q.plan_id=p.id) FROM plans p CROSS JOIN plan_settings ps WHERE ps.id=1 ORDER BY p.created_at,p.id")
 		if err != nil {
 			apiErr(w, 503, "database_unavailable", err.Error())
 			return
 		}
 		out := []model.Plan{}
 		for rows.Next() {
-			p, scanErr := scanPlan(rows)
+			var isDefault bool
+			var members int
+			p, scanErr := scanPlan(rows, &isDefault, &members)
+			p.Default, p.Members = isDefault, members
 			if err = scanErr; err != nil {
 				break
 			}
@@ -215,18 +220,6 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 		if err != nil || readErr != nil {
 			apiErr(w, 503, "database_unavailable", "could not read plans")
 			return
-		}
-		var def string
-		if err = db.QueryRowContext(ctx, "SELECT default_plan_id FROM plan_settings WHERE id=1").Scan(&def); err != nil {
-			apiErr(w, 503, "database_unavailable", err.Error())
-			return
-		}
-		for i := range out {
-			out[i].Default = out[i].ID == def
-			if err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM quotas WHERE plan_id=?", out[i].ID).Scan(&out[i].Members); err != nil {
-				apiErr(w, 503, "database_unavailable", err.Error())
-				return
-			}
 		}
 		writeJSON(w, 200, map[string]any{"items": out, "total": len(out)})
 		return
@@ -248,12 +241,16 @@ func (s *Server) plans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID, p.Version, p.Legacy, p.Members = id(), 1, false, 0
-	if _, err := db.ExecContext(ctx, "INSERT INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,edge_ids,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.BandwidthBPS, p.MaxPorts, p.MaxSites, p.AllEdges, encodeJSON(p.EdgeIDs), p.BurstEnabled, p.BurstBPS, p.BurstSeconds, p.TrafficMetered, p.TrafficBytes, p.PeriodSeconds, p.OverageAction, p.OverageBPS, now(), now()); err != nil {
+	if _, err := db.ExecContext(ctx, "INSERT INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,burst_enabled,burst_bps,burst_seconds,traffic_metered,traffic_bytes,period_seconds,overage_action,overage_bps,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.BandwidthBPS, p.MaxPorts, p.MaxSites, p.AllEdges, p.BurstEnabled, p.BurstBPS, p.BurstSeconds, p.TrafficMetered, p.TrafficBytes, p.PeriodSeconds, p.OverageAction, p.OverageBPS, now(), now()); err != nil {
+		apiErr(w, 503, "database_unavailable", err.Error())
+		return
+	}
+	if err := writePlanEdges(ctx, db, p.ID, p.EdgeIDs); err != nil {
 		apiErr(w, 503, "database_unavailable", err.Error())
 		return
 	}
 	if p.Default {
-		if _, err := db.ExecContext(ctx, "UPDATE plan_settings SET default_plan_id=? WHERE id=1", p.ID); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE plan_settings SET default_plan_id=NULLIF(?,'') WHERE id=1", p.ID); err != nil {
 			apiErr(w, 503, "database_unavailable", err.Error())
 			return
 		}
@@ -289,7 +286,7 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 409, "plan_in_use", "套餐已分配或设为默认")
 			return
 		}
-		if _, err = db.ExecContext(ctx, "DELETE FROM plans WHERE id=?", pid); err != nil {
+		if _, err = db.ExecContext(ctx, "DELETE FROM plans p WHERE p.id=?", pid); err != nil {
 			apiErr(w, 503, "database_unavailable", err.Error())
 			return
 		}
@@ -311,7 +308,11 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID, p.Legacy, p.Version = pid, false, old.Version+1
-	if _, err = db.ExecContext(ctx, "UPDATE plans SET name=?,bandwidth_bps=?,max_ports=?,max_sites=?,all_edges=?,edge_ids=?,burst_enabled=?,burst_bps=?,burst_seconds=?,traffic_metered=?,traffic_bytes=?,period_seconds=?,overage_action=?,overage_bps=?,legacy=0,version=version+1,updated_at=? WHERE id=?", p.Name, p.BandwidthBPS, p.MaxPorts, p.MaxSites, p.AllEdges, encodeJSON(p.EdgeIDs), p.BurstEnabled, p.BurstBPS, p.BurstSeconds, p.TrafficMetered, p.TrafficBytes, p.PeriodSeconds, p.OverageAction, p.OverageBPS, now(), pid); err != nil {
+	if _, err = db.ExecContext(ctx, "UPDATE plans SET name=?,bandwidth_bps=?,max_ports=?,max_sites=?,all_edges=?,burst_enabled=?,burst_bps=?,burst_seconds=?,traffic_metered=?,traffic_bytes=?,period_seconds=?,overage_action=?,overage_bps=?,legacy=0,version=version+1,updated_at=? WHERE id=?", p.Name, p.BandwidthBPS, p.MaxPorts, p.MaxSites, p.AllEdges, p.BurstEnabled, p.BurstBPS, p.BurstSeconds, p.TrafficMetered, p.TrafficBytes, p.PeriodSeconds, p.OverageAction, p.OverageBPS, now(), pid); err != nil {
+		apiErr(w, 503, "database_unavailable", err.Error())
+		return
+	}
+	if err = writePlanEdges(ctx, db, pid, p.EdgeIDs); err != nil {
 		apiErr(w, 503, "database_unavailable", err.Error())
 		return
 	}
@@ -320,7 +321,7 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 	} else if def == pid {
 		def = ""
 	}
-	if _, err = db.ExecContext(ctx, "UPDATE plan_settings SET default_plan_id=? WHERE id=1", def); err != nil {
+	if _, err = db.ExecContext(ctx, "UPDATE plan_settings SET default_plan_id=NULLIF(?,'') WHERE id=1", def); err != nil {
 		apiErr(w, 503, "database_unavailable", err.Error())
 		return
 	}

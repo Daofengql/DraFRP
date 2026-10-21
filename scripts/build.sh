@@ -22,6 +22,6 @@ for role in cloud edge client; do
     -o "$out/drafrp-$role$suffix" "./cmd/drafrp-$role"
 done
 cp -R examples "$out/"
-cp README.md IMPLEMENTATION.md API-CONTRACT.md "$out/"
+cp README.md IMPLEMENTATION.md API-CONTRACT.md SCHEMA-INTEGRITY.md "$out/"
 (cd "$out" && sha256sum drafrp-* > SHA256SUMS)
 printf '%s\n' "$out"

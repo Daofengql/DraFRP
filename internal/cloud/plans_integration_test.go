@@ -312,7 +312,7 @@ func TestMySQLPlanNodeRemovalRevokesRuntimeAndBandwidth(t *testing.T) {
 func TestMySQLPlanMigrationPreservesExistingPolicy(t *testing.T) {
 	f := newCloudFixture(t)
 	b := f.createUser("package-migration")
-	if _, err := f.s.db.Exec("UPDATE quotas SET plan_id='',allowed_edge_ids=NULL,base_bps=123456,peak_bps=789012,max_ports=3,max_rules=7 WHERE tenant_id=?", b.user.TenantID); err != nil {
+	if _, err := f.s.db.Exec("UPDATE quotas SET plan_id=NULL,allowed_edge_ids=NULL,base_bps=123456,peak_bps=789012,max_ports=3,max_rules=7 WHERE tenant_id=?", b.user.TenantID); err != nil {
 		t.Fatal(err)
 	}
 	if err := migrate(context.Background(), f.s.db); err != nil {
@@ -349,24 +349,45 @@ func TestMySQLUsageSummaryCountsAllGrantsAndScopesTenant(t *testing.T) {
 	edge := f.edge("summary-exit")
 	// More records than the raw /usage page cap; each row is cumulative for a
 	// grant, and a later report replaces that grant's previous counters.
-	args := []any{}
-	for i := 0; i < 1005; i++ {
-		args = append(args, fmt.Sprintf("summary-%d", i), b.user.TenantID, edge.ID, "summary-boot", 1, 1, 2, now())
+	seedSummaryGrant := func(gid, tid string, eid any, issued string, up, down int64) {
+		t.Helper()
+		if _, err := f.s.quotaSnapshot(context.Background(), tid); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.s.db.Exec(`INSERT INTO grants_table(id,tenant_id,edge_id,issued_edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,reserved,used,closed,created_at)
+   VALUES(?,?,?,?,'summary',?,?,-1,-1,0,-1,-1,?,?,1,?)`, gid, tid, eid, issued, now(), up+down, up+down, up+down, now()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.s.db.Exec("INSERT INTO usage_table(grant_id,sequence_no,upload_bytes,download_bytes,observed_at) VALUES(?,1,?,?,?)", gid, up, down, now()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	query := "INSERT INTO usage_table(grant_id,tenant_id,edge_id,boot_id,sequence_no,upload_bytes,download_bytes,observed_at) VALUES " + strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?,?,?),", 1005), ",")
+	if _, err := f.s.quotaSnapshot(context.Background(), b.user.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	args, usageArgs := []any{}, []any{}
+	for i := 0; i < 1005; i++ {
+		gid := fmt.Sprintf("summary-%d", i)
+		args = append(args, gid, b.user.TenantID, edge.ID, edge.ID, now(), now())
+		usageArgs = append(usageArgs, gid, now())
+	}
+	query := "INSERT INTO grants_table(id,tenant_id,edge_id,issued_edge_id,boot_id,expires_at,bytes,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,reserved,used,closed,created_at) VALUES " + strings.TrimSuffix(strings.Repeat("(?,?,?,?,'summary',?,33,-1,-1,0,-1,-1,33,3,1,?),", 1005), ",")
 	if _, err := f.s.db.Exec(query, args...); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.db.Exec("INSERT INTO usage_table(grant_id,sequence_no,upload_bytes,download_bytes,observed_at) VALUES "+strings.TrimSuffix(strings.Repeat("(?,1,1,2,?),", 1005), ","), usageArgs...); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.db.Exec("UPDATE usage_table SET upload_bytes=11,download_bytes=22,sequence_no=2 WHERE grant_id='summary-0'"); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []struct {
-		id, tid, eid string
-		up, down     int
-	}{{"removed", b.user.TenantID, "removed-exit", 7, 9}, {"private", other.user.TenantID, edge.ID, 999999, 999999}} {
-		if _, err := f.s.db.Exec("INSERT INTO usage_table(grant_id,tenant_id,edge_id,boot_id,upload_bytes,download_bytes,observed_at) VALUES(?,?,?,'summary',?,?,?)", row.id, row.tid, row.eid, row.up, row.down, now()); err != nil {
-			t.Fatal(err)
-		}
+		id, tid  string
+		eid      any
+		issued   string
+		up, down int
+	}{{"removed", b.user.TenantID, nil, "removed-exit", 7, 9}, {"private", other.user.TenantID, edge.ID, edge.ID, 999999, 999999}} {
+		seedSummaryGrant(row.id, row.tid, row.eid, row.issued, int64(row.up), int64(row.down))
 	}
 	list := decodeResponse[struct {
 		Items []struct {
@@ -382,6 +403,9 @@ func TestMySQLUsageSummaryCountsAllGrantsAndScopesTenant(t *testing.T) {
 		down += row.Down
 		if row.EdgeID == edge.ID && row.Name != edge.Name {
 			t.Fatal("missing exit name", row)
+		}
+		if row.EdgeID == "removed-exit" && (row.Up != 7 || row.Down != 9) {
+			t.Fatal("deleted exit lost its own usage group", row)
 		}
 	}
 	if len(list.Items) != 2 || up != 1022 || down != 2039 {

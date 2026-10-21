@@ -322,7 +322,7 @@ func TestFullSystem(t *testing.T) {
 				t.Fatalf("observed rule status=%s: %s", actual.Status, actual.LastError)
 			}
 			var usage int64
-			if err = s.DB().QueryRow("SELECT COALESCE(SUM(upload_bytes+download_bytes),0) FROM usage_table WHERE tenant_id=?", b.user.TenantID).Scan(&usage); err != nil || usage < int64(len(payload)*4) {
+			if err = s.DB().QueryRow("SELECT COALESCE(SUM(upload_bytes+download_bytes),0) FROM usage_table u JOIN grants_table g ON g.id=u.grant_id WHERE g.tenant_id=?", b.user.TenantID).Scan(&usage); err != nil || usage < int64(len(payload)*4) {
 				t.Fatalf("durable usage=%d err=%v", usage, err)
 			}
 			// Two independently bound devices must draw from the same account cap.

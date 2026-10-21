@@ -259,7 +259,7 @@ func (s *Server) bootstrap(ctx context.Context) error {
 	if _, e = lockPlanSettings(ctx, tx); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,edge_ids,legacy,created_at,updated_at) VALUES('builtin-admin','管理套餐',-1,-1,-1,1,JSON_ARRAY(),1,?,?)", now(), now()); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,bandwidth_bps,max_ports,max_sites,all_edges,legacy,created_at,updated_at) VALUES('builtin-admin','管理套餐',-1,-1,-1,1,1,?,?)", now(), now()); e != nil {
 		return e
 	}
 	p, e := readPlan(ctx, tx, "builtin-admin")

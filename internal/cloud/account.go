@@ -12,7 +12,7 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, "GET") {
 		return
 	}
-	rows, err := s.store(r.Context()).QueryContext(r.Context(), "SELECT u.edge_id,COALESCE(e.name,''),SUM(u.upload_bytes),SUM(u.download_bytes),MAX(u.observed_at) FROM usage_table u LEFT JOIN edges e ON e.id=u.edge_id WHERE u.tenant_id=? GROUP BY u.edge_id,e.name ORDER BY MAX(u.observed_at) DESC", tenant(r))
+	rows, err := s.store(r.Context()).QueryContext(r.Context(), "SELECT g.issued_edge_id,COALESCE(e.name,''),SUM(u.upload_bytes),SUM(u.download_bytes),MAX(u.observed_at) FROM usage_table u JOIN grants_table g ON g.id=u.grant_id LEFT JOIN edges e ON e.id=g.issued_edge_id WHERE g.tenant_id=? GROUP BY g.issued_edge_id,e.name ORDER BY MAX(u.observed_at) DESC", tenant(r))
 	if err != nil {
 		apiErr(w, 503, "database_unavailable", err.Error())
 		return

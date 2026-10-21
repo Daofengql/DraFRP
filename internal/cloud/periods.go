@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const quotaColumns = "tenant_id,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,period_bytes,used_bytes,reserved_bytes,version,period_id,period_seconds,period_started_at,period_ends_at,max_devices,max_rules,max_ports,max_domains,max_sites,plan_id,allowed_edge_ids,overage_action,overage_bps"
+const quotaColumns = "tenant_id,base_bps,peak_bps,burst_bytes,max_connections,new_flows_per_second,period_bytes,used_bytes,reserved_bytes,version,period_id,period_seconds,period_started_at,period_ends_at,max_devices,max_rules,max_ports,max_domains,max_sites,COALESCE(plan_id,''),allowed_edge_ids,overage_action,overage_bps"
 
 func readQuota(ctx context.Context, db sqlStore, tid string, locked bool) (model.Quota, error) {
 	q := model.Quota{}
