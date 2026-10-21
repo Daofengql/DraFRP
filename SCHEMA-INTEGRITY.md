@@ -13,7 +13,7 @@
 | 授权与出口节点 | 活跃或未结算授权阻止直接删除；结算后 `edge_id` 置空 | 节点行可以删除，累计用量仍按 `issued_edge_id` 和 `boot_id` 保留原始归属。 |
 | ACL 观测与审计 | 规则、节点、操作者 ID 保留为历史标签 | 观测有七天保留期；当前资源删除不应改写历史。空间删除可清除该空间的观测。 |
 
-`plans.edge_ids` JSON 已迁入带外键的 `plan_edges`。`usage_table` 不再重复保存空间、节点和 boot 身份；查询经 `grants_table` 获取。`grants_table.issued_edge_id` 是不可变的历史身份，`edge_id` 是可置空的当前外键。授权的 `used` 是已经结算到配额的字节数，`usage_table` 中的累计上报还承担序列幂等检查，两者在迟到报告后可以不同。`quotas.allowed_edge_ids` 仍保留为有效套餐的版本化快照：配额行锁要以同一份快照完成准入和运行授权，不能在每次判定时临时读取正在编辑的套餐。
+`plans.edge_ids` JSON 已迁入带外键的 `plan_edges`。`usage_table` 和分钟历史 `usage_history` 均通过授权外键引用 `grants_table`，不重复保存空间与节点身份。`grants_table.issued_edge_id` 是不可变的历史身份，`edge_id` 是可置空的当前外键。授权的 `used` 是已经结算到配额的字节数，`usage_table` 中的累计上报还承担序列幂等检查，两者在迟到报告后可以不同。`quotas.allowed_edge_ids` 仍保留为有效套餐的版本化快照：配额行锁要以同一份快照完成准入和运行授权，不能在每次判定时临时读取正在编辑的套餐。
 
 升级会取得数据库级 advisory lock；MySQL DDL 本身会隐式提交，所以每一步都能重试，`schema_migrations` 只在全部完成后写入。旧套餐 JSON 在关联表回填成功前不删除。旧用量的身份副本会先与授权核对，再移除冗余列；无法对应的用量、跨空间引用或缺失的原始节点 ID 会停止升级并保留原行，错误仅报告关系名和数量。缺少可恢复归属的旧端口预留标为 `NULL`，在核对或到期前阻止有限端口套餐增加端口。
 

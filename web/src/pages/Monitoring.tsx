@@ -23,7 +23,7 @@ import {
   useResource,
   useSessionContext,
 } from "../ui";
-import type { Audit, Overview, Rule, System, List } from "../types";
+import type { Audit, Overview, Rule, System } from "../types";
 import { PlanUsage, useAccount } from "./Account";
 
 export function SystemPanel() {
@@ -64,13 +64,13 @@ export function SystemPanel() {
 
 export function OverviewPage({ platform = false }: { platform?: boolean }) {
   const { user } = useSessionContext();
-  const account = useAccount();
+  const account = useAccount(!platform);
   const q = useQuery<Overview>({
     queryKey: ["overview", user.id, user.tenant_id, platform],
     queryFn: ({ signal }) =>
       request(platform ? "/overview?scope=platform" : "/overview", { signal }),
   });
-  const rules = useResource<Rule>("/rules", "rules");
+  const rules = useResource<Rule>("/rules", "rules", !platform);
   const items = rules.data?.items || [],
     sites = items.filter(
       (r) => ["http", "https"].includes(r.protocol) && !r.deleting,
@@ -90,8 +90,10 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
             <Button
               onClick={() => {
                 void q.refetch();
-                void rules.refetch();
-                void account.refetch();
+                if (!platform) {
+                  void rules.refetch();
+                  void account.refetch();
+                }
               }}
             >
               刷新
@@ -149,64 +151,72 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
           </Load>
         </Box>
       )}
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ mb: 1 }}
-      >
-        <Typography fontWeight={600}>待处理服务 · {issues.length}</Typography>
-        <Typography variant="body2" color="text.secondary">
-          隧道{" "}
-          {
-            items.filter(
-              (r) => !["http", "https"].includes(r.protocol) && !r.deleting,
-            ).length
-          }{" "}
-          · 网站 {sites.length}
-        </Typography>
-      </Stack>
-      <Load loading={rules.isLoading} error={rules.error}>
-        {!issues.length ? (
-          <Empty title="暂无待处理服务" />
-        ) : (
-          <TableFrame>
-            <TableHead>
-              <TableRow>
-                <TableCell>服务</TableCell>
-                <TableCell>协议</TableCell>
-                <TableCell>状态</TableCell>
-                <TableCell>原因</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {issues.slice(0, 8).map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell>
-                    <Button
-                      component={Link}
-                      to={`/${["http", "https"].includes(r.protocol) ? "sites" : "rules"}/${r.id}`}
-                    >
-                      {r.name}
-                    </Button>
-                  </TableCell>
-                  <TableCell>{r.protocol.toUpperCase()}</TableCell>
-                  <TableCell>
-                    <Status
-                      value={r.plan_restricted ? "plan_restricted" : r.status}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {r.plan_restricted
-                      ? "套餐未包含当前出口节点"
-                      : r.last_error || "等待出口节点应用"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </TableFrame>
-        )}
-      </Load>
+      {!platform && (
+        <>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ mb: 1 }}
+          >
+            <Typography fontWeight={600}>
+              待处理服务 · {issues.length}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              隧道{" "}
+              {
+                items.filter(
+                  (r) => !["http", "https"].includes(r.protocol) && !r.deleting,
+                ).length
+              }{" "}
+              · 网站 {sites.length}
+            </Typography>
+          </Stack>
+          <Load loading={rules.isLoading} error={rules.error}>
+            {!issues.length ? (
+              <Empty title="暂无待处理服务" />
+            ) : (
+              <TableFrame>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>服务</TableCell>
+                    <TableCell>协议</TableCell>
+                    <TableCell>状态</TableCell>
+                    <TableCell>原因</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {issues.slice(0, 8).map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>
+                        <Button
+                          component={Link}
+                          to={`/${["http", "https"].includes(r.protocol) ? "sites" : "rules"}/${r.id}`}
+                        >
+                          {r.name}
+                        </Button>
+                      </TableCell>
+                      <TableCell>{r.protocol.toUpperCase()}</TableCell>
+                      <TableCell>
+                        <Status
+                          value={
+                            r.plan_restricted ? "plan_restricted" : r.status
+                          }
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {r.plan_restricted
+                          ? "套餐未包含当前出口节点"
+                          : r.last_error || "等待出口节点应用"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </TableFrame>
+            )}
+          </Load>
+        </>
+      )}
       {!platform && items.length > 0 && (
         <>
           <Typography fontWeight={600} sx={{ mt: 2, mb: 1 }}>
@@ -267,90 +277,6 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
           <SystemPanel />
         </Box>
       )}
-    </>
-  );
-}
-
-export function UsagePage() {
-  type NodeUsage = {
-    edge_id: string;
-    edge_name: string;
-    upload_bytes: number;
-    download_bytes: number;
-    observed_at: string;
-  };
-  const { user } = useSessionContext();
-  const q = useQuery<List<NodeUsage>>({
-    queryKey: ["usage", user.id, user.tenant_id, "summary"],
-    queryFn: ({ signal }) => request("/usage-summary", { signal }),
-  });
-  const rows = q.data?.items || [];
-  const up = rows.reduce((n, r) => n + r.upload_bytes, 0),
-    down = rows.reduce((n, r) => n + r.download_bytes, 0);
-  return (
-    <>
-      <PageTitle
-        title="流量用量"
-        action={<Button onClick={() => q.refetch()}>刷新</Button>}
-      />
-      <Load loading={q.isPending} error={q.error}>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))",
-            gap: 1.5,
-            mb: 2,
-          }}
-        >
-          {[
-            ["累计上传", up],
-            ["累计下载", down],
-            ["总流量", up + down],
-          ].map(([label, value]) => (
-            <Paper key={label} variant="outlined" sx={{ p: 1.5 }}>
-              <Typography variant="body2" color="text.secondary">
-                {label}
-              </Typography>
-              <Typography variant="h5" fontWeight={600} sx={{ mt: 0.5 }}>
-                {fmtBytes(Number(value))}
-              </Typography>
-            </Paper>
-          ))}
-        </Box>
-        <Typography fontWeight={600} sx={{ mb: 1 }}>
-          出口节点用量
-        </Typography>
-        {!rows.length ? (
-          <Empty title="暂无用量统计" />
-        ) : (
-          <TableFrame>
-            <TableHead>
-              <TableRow>
-                <TableCell>出口节点</TableCell>
-                <TableCell>上传</TableCell>
-                <TableCell>下载</TableCell>
-                <TableCell>总流量</TableCell>
-                <TableCell>最近上报</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.edge_id}>
-                  <TableCell title={r.edge_id}>
-                    {r.edge_name || `已移除节点 · ${r.edge_id.slice(0, 8)}`}
-                  </TableCell>
-                  <TableCell>{fmtBytes(r.upload_bytes)}</TableCell>
-                  <TableCell>{fmtBytes(r.download_bytes)}</TableCell>
-                  <TableCell>
-                    {fmtBytes(r.upload_bytes + r.download_bytes)}
-                  </TableCell>
-                  <TableCell>{fmtDate(r.observed_at)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </TableFrame>
-        )}
-      </Load>
     </>
   );
 }

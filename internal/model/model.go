@@ -238,12 +238,13 @@ type Grant struct {
 	PeriodID          string    `json:"period_id"`
 }
 type Usage struct {
-	GrantID       string    `json:"grant_id"`
-	Sequence      uint64    `json:"sequence"`
-	UploadBytes   int64     `json:"upload_bytes"`
-	DownloadBytes int64     `json:"download_bytes"`
-	Closed        bool      `json:"closed"`
-	ObservedAt    time.Time `json:"observed_at"`
+	Minutes       []TrafficMinute `json:"minutes,omitempty"`
+	GrantID       string          `json:"grant_id"`
+	Sequence      uint64          `json:"sequence"`
+	UploadBytes   int64           `json:"upload_bytes"`
+	DownloadBytes int64           `json:"download_bytes"`
+	Closed        bool            `json:"closed"`
+	ObservedAt    time.Time       `json:"observed_at"`
 }
 type RuleStatus struct {
 	ID      string `json:"id"`

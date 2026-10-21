@@ -158,5 +158,8 @@ func migrateLocked(ctx context.Context, db *sql.DB) error {
 	if err := migrateACLObservations(ctx, db); err != nil {
 		return err
 	}
-	return migrateIntegrity(ctx, db)
+	if err := migrateIntegrity(ctx, db); err != nil {
+		return err
+	}
+	return migrateTraffic(ctx, db)
 }

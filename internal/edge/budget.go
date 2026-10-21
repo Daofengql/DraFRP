@@ -6,6 +6,7 @@ import (
 	"drafrp/internal/model"
 	"errors"
 	"io"
+	"sort"
 	"sync"
 	"time"
 )
@@ -21,6 +22,7 @@ type accountBudget struct {
 	active               int
 	retired              bool
 	sequence             uint64
+	minutes              map[int64]model.TrafficMinute
 	upBucket, downBucket *limiter.Bucket
 	conns                *limiter.Connections
 	newFlows             *limiter.Flows
@@ -124,21 +126,77 @@ func (b *accountBudget) reserveContext(ctx context.Context, n int, atomic bool) 
 	}
 }
 func (b *accountBudget) complete(reserved, written int, upload bool) {
+	b.completeAt(reserved, written, upload, time.Time{})
+}
+
+func (b *accountBudget) completeAt(reserved, written int, upload bool, at time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.held -= int64(reserved)
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	if upload {
 		b.upload += int64(written)
 	} else {
 		b.download += int64(written)
 	}
+	if written > 0 {
+		if b.minutes == nil {
+			b.minutes = make(map[int64]model.TrafficMinute)
+		}
+		start := at.UTC().Truncate(time.Minute)
+		m, exists := b.minutes[start.Unix()]
+		// Accounting always continues if telemetry reaches its memory bound.
+		// Cloud records any remaining delta at receipt time, explicitly labelled.
+		if exists || len(b.minutes) < model.MaxTrafficMinutes-1 {
+			m.Start = start
+			if upload {
+				m.UploadBytes += int64(written)
+			} else {
+				m.DownloadBytes += int64(written)
+			}
+			b.minutes[start.Unix()] = m
+		}
+	}
 	b.signalLocked()
 }
 func (b *accountBudget) report() model.Usage {
+	return b.reportAt(time.Time{})
+}
+
+func (b *accountBudget) reportAt(at time.Time) model.Usage {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.sequence++
-	return model.Usage{GrantID: b.grant.ID, Sequence: b.sequence, UploadBytes: b.upload, DownloadBytes: b.download, Closed: b.retired && b.active == 0 && b.held == 0, ObservedAt: time.Now().UTC()}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	minutes := make([]model.TrafficMinute, 0, len(b.minutes)+1)
+	for _, m := range b.minutes {
+		minutes = append(minutes, m)
+	}
+	current := at.Truncate(time.Minute)
+	if _, ok := b.minutes[current.Unix()]; !ok {
+		minutes = append(minutes, model.TrafficMinute{Start: current})
+	}
+	sort.Slice(minutes, func(i, j int) bool { return minutes[i].Start.Before(minutes[j].Start) })
+	return model.Usage{Minutes: minutes, GrantID: b.grant.ID, Sequence: b.sequence, UploadBytes: b.upload, DownloadBytes: b.download, Closed: b.retired && b.active == 0 && b.held == 0, ObservedAt: at}
+}
+
+func (b *accountBudget) acknowledgeMinutes(u model.Usage) {
+	b.acknowledgeMinutesAt(u, time.Now().UTC())
+}
+
+func (b *accountBudget) acknowledgeMinutesAt(u model.Usage, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, sent := range u.Minutes {
+		// Keep the current minute's absolute counters across acknowledgements.
+		if m, ok := b.minutes[sent.Start.Unix()]; ok && sent.Start.Before(at.Truncate(time.Minute)) && m == sent {
+			delete(b.minutes, sent.Start.Unix())
+		}
+	}
 }
 func (b *accountBudget) isSettled(u model.Usage) bool {
 	b.mu.Lock()

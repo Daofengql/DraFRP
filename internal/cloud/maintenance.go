@@ -36,6 +36,7 @@ func (s *Server) maintain(ctx context.Context) {
 			_, _ = s.db.ExecContext(work, "DELETE FROM bindings WHERE expires_at<? LIMIT 1000", now().Add(-24*time.Hour))
 			_, _ = s.db.ExecContext(work, "DELETE FROM sessions WHERE expires_at<? LIMIT 1000", now().Add(-24*time.Hour))
 			_, _ = s.db.ExecContext(work, "DELETE FROM acl_observations WHERE received_at<? LIMIT 1000", now().Add(-7*24*time.Hour))
+			_, _ = s.db.ExecContext(work, "DELETE FROM usage_history WHERE bucket_start<? LIMIT 1000", now().Truncate(time.Minute).Add(-trafficRetention))
 			cancel()
 		}
 	}

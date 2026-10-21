@@ -758,6 +758,9 @@ func (s *Server) settleUsage(ctx context.Context, u model.Usage, eid, boot strin
 	if _, e = tx.ExecContext(ctx, "INSERT INTO usage_table(grant_id,sequence_no,upload_bytes,download_bytes,closed,observed_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE sequence_no=VALUES(sequence_no),upload_bytes=VALUES(upload_bytes),download_bytes=VALUES(download_bytes),closed=VALUES(closed),observed_at=VALUES(observed_at)", u.GrantID, u.Sequence, u.UploadBytes, u.DownloadBytes, u.Closed, now()); e != nil {
 		return e
 	}
+	if e = recordTraffic(ctx, tx, u, u.UploadBytes-up, u.DownloadBytes-down, now()); e != nil {
+		return e
+	}
 	if !stopped {
 		total := u.UploadBytes + u.DownloadBytes
 		delta := total - spent

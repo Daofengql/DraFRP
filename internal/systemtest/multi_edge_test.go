@@ -187,6 +187,11 @@ func TestMultiEdgeSharesAccountAuthority(t *testing.T) {
 	if used != businessBytes || reserved+used != quota.PeriodBytes || credit > quota.PeriodBytes || maxConnections > quota.MaxConnections {
 		t.Fatalf("durable shared ledger: used=%d/%d reserved=%d credits=%d connections=%d", used, businessBytes, reserved, credit, maxConnections)
 	}
+	var history model.TrafficHistory
+	browser.api("GET", "/api/v1/usage-history", nil, &history, 200)
+	if history.UploadBytes+history.DownloadBytes != businessBytes || history.ReceiptBytes != 0 {
+		t.Fatalf("two-edge minute history differs from actual payload: up=%d down=%d want=%d receipt=%d", history.UploadBytes, history.DownloadBytes, businessBytes, history.ReceiptBytes)
+	}
 	// Tightening a policy updates the existing IDs in place: no fresh grant,
 	// carrier reconnect, or account bucket reset is required to revoke traffic.
 	var before [2]string
