@@ -83,7 +83,7 @@ export function errorMessage(error: unknown) {
   if (error instanceof APIError && error.code === "resource_quota_exceeded")
     return `${error.message}。当前输入已保留。`;
   if (error instanceof APIError && error.code === "version_conflict")
-    return `配置已被其他操作修改。当前输入已保留，请读取最新配置比较后再保存。${error.message}`;
+    return `配置已更新，保存前需读取最新版本。当前输入已保留。${error.message}`;
   if (error instanceof APIError && error.status === 409)
     return `资源冲突：${error.message}。当前输入已保留。`;
   return error instanceof Error ? error.message : "操作失败，请重试";

@@ -67,12 +67,10 @@ export function BindPage() {
         DraFRP
       </Typography>
       <Paper variant="outlined" sx={{ p: 3 }}>
-        <PageTitle title="确认设备绑定" detail={`已登录为 ${user.username}`} />
+        <PageTitle title="确认设备绑定" detail={`当前账号：${user.username}`} />
         {deviceID ? (
           <Stack spacing={2}>
-            <Alert severity="success">
-              设备已绑定，等待 Agent 使用自身身份同步。
-            </Alert>
+            <Alert severity="success">设备已绑定</Alert>
             <Button
               component={Link}
               to={`/devices/${deviceID}`}
@@ -109,10 +107,7 @@ export function BindPage() {
                           : q.data.status
                     }
                   />
-                  <Alert severity="info">
-                    请核对 Agent
-                    显示的设备名称、公钥指纹和用户码。仅绑定你正在操作的设备。
-                  </Alert>
+                  <Alert severity="info">绑定信息须与 Agent 显示一致。</Alert>
                   <TextField
                     label="设备名称"
                     value={name}
@@ -182,7 +177,7 @@ export function DevicesPage() {
     <>
       <PageTitle
         title="设备"
-        detail="每台 Agent 拥有独立身份、能力和会话"
+        detail="设备绑定、会话状态与关联规则"
         action={
           <Button variant="contained" onClick={() => setBind(true)}>
             确认绑定
@@ -217,10 +212,7 @@ export function DevicesPage() {
       </Stack>
       <Load loading={q.isLoading} error={q.error}>
         {!rows.length ? (
-          <Empty
-            title={q.data?.items.length ? "没有匹配设备" : "还没有绑定设备"}
-            detail="在 Agent 本机运行绑定命令，打开其授权链接或填写用户码。"
-          />
+          <Empty title={q.data?.items.length ? "没有匹配设备" : "暂无设备"} />
         ) : (
           <TableFrame>
             <TableHead>
@@ -311,8 +303,7 @@ export function DevicesPage() {
             该设备的{" "}
             {rules.data?.items.filter((r) => r.device_id === revoking.id)
               .length ?? "未知数量"}{" "}
-            条关联规则将停用，现有连接可能中断。恢复使用需要在 Agent
-            上重新绑定。
+            条关联规则将停用，现有连接可能中断。再次使用需重新绑定。
           </Typography>
         </Confirm>
       )}
@@ -358,14 +349,12 @@ export function DevicesPage() {
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>填写 Agent 用户码</DialogTitle>
+        <DialogTitle>绑定设备</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <Typography>
-              浏览器仅确认设备归属，不接收设备私钥或长期凭据。
-            </Typography>
             <TextField
               label="用户码"
+              helperText="Agent 显示的用户码"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               autoFocus
@@ -438,18 +427,16 @@ export function DevicePage() {
               </Box>
             </Paper>
             <DeviceTransport device={d} />
-            <Alert severity="info">
-              Linux IPv4 透明 socket：TCP{" "}
+            <Typography variant="body2" color="text.secondary">
+              原生保源（Linux IPv4）：TCP{" "}
               {nativeSourceCapability("tcp", d.capabilities)
-                ? "已上报 IP+端口能力"
-                : "未上报能力"}
+                ? "支持"
+                : "未上报"}
               ；UDP{" "}
               {nativeSourceCapability("udp", d.capabilities)
-                ? "已上报 IP+端口能力"
-                : "未上报能力"}
-              。使用前需要本机 transparent 网络模式、权限及目标网络回程配置；TUN
-              与 IPv6 保源尚未实现。
-            </Alert>
+                ? "支持"
+                : "未上报"}
+            </Typography>
             <Typography variant="h6">该设备的规则</Typography>
             <Load loading={rules.isLoading} error={rules.error}>
               {!rows.length ? (

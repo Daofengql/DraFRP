@@ -396,8 +396,7 @@ function Authenticated({
     <>
       {events === "disconnected" && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          状态事件连接已中断。当前显示最后快照，页面可见时将以 15–60
-          秒间隔重新读取。
+          实时更新已断开，当前数据定时刷新。
         </Alert>
       )}
       {buildMismatch && (
@@ -406,12 +405,12 @@ function Authenticated({
           sx={{ mb: 2 }}
           action={
             <Button color="inherit" onClick={() => window.location.reload()}>
-              刷新版本
+              刷新页面
             </Button>
           }
         >
-          服务已升级。请先处理未提交的表单，再刷新页面。页面 {__BUILD_ID__} /
-          服务 {session.build_id}
+          新版本可用。刷新将清除未保存的输入。当前版本 {__BUILD_ID__} / 最新版本{" "}
+          {session.build_id}
         </Alert>
       )}
     </>

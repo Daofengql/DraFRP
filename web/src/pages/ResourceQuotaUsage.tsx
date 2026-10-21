@@ -35,13 +35,11 @@ export default function ResourceQuotaUsage({ quota }: { quota: Quota }) {
       </div>
       {reached && (
         <Alert severity="warning" sx={{ mt: 2 }}>
-          部分配置资源已达上限，继续增加前请释放资源或联系管理员调整配额。
+          部分资源已达配额上限。
         </Alert>
       )}
       <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
         统计时间：{fmtDate(quota.resources?.observed_at)}
-        。设备不含已撤销项；规则包含站点和等待释放项，端口按 TCP/UDP
-        分别计数，等待撤销确认或到期的旧端口继续占额；域名包含待验证项。
       </Typography>
     </Paper>
   );

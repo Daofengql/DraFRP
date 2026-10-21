@@ -50,8 +50,8 @@ const kinds: Record<string, string> = {
   mandatory_template: "强制父策略",
   rule_template: "规则模板",
   rule_inline: "规则独立策略",
-  template: "模板预览",
-  draft: "手工草稿预览",
+  template: "模板",
+  draft: "草稿",
 };
 const reasons: Record<string, string> = {
   all_policies_allow: "所有适用策略均允许",
@@ -140,11 +140,9 @@ function SimulationDialog({
       <DialogTitle>来源 ACL 模拟 · {title}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="info">
-            仅解释指定配置下的来源 ACL
-            判断。模拟不会发布策略，也不保证公网连通、Agent
-            在线或账号有剩余额度。地域信息为本次手工假设，不读取边缘的真实地址库。
-          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            按指定来源和地域条件计算策略匹配结果。
+          </Typography>
           <div className="form-grid">
             <TextField
               label="访客来源 IP"
@@ -172,7 +170,8 @@ function SimulationDialog({
               <MenuItem value="udp">UDP</MenuItem>
             </TextField>
             <TextField
-              label="模拟时间 RFC3339（留空使用当前时间）"
+              label="模拟时间（可选）"
+              helperText="RFC3339 格式；留空使用当前时间"
               value={form.at}
               onChange={(e) => set("at", e.target.value)}
               disabled={simulation.isPending}
@@ -180,14 +179,14 @@ function SimulationDialog({
           </div>
           <TextField
             select
-            label="本次模拟的地域查询状态"
+            label="模拟地域状态"
             value={form.geo_state}
             onChange={(e) => set("geo_state", e.target.value)}
             disabled={simulation.isPending}
           >
-            <MenuItem value="unavailable">地域查询不可用</MenuItem>
-            <MenuItem value="unknown">地址库可用，但来源地域未知</MenuItem>
-            <MenuItem value="known">手工指定来源国家 / 地区</MenuItem>
+            <MenuItem value="unavailable">地址库不可用</MenuItem>
+            <MenuItem value="unknown">地域未知</MenuItem>
+            <MenuItem value="known">指定国家 / 地区</MenuItem>
           </TextField>
           {form.geo_state === "known" && (
             <div className="form-grid">
@@ -195,7 +194,7 @@ function SimulationDialog({
                 label="来源国家代码"
                 value={form.country}
                 onChange={(e) => set("country", e.target.value)}
-                helperText="两位大写字母，由你填写"
+                helperText="两位大写字母"
                 disabled={simulation.isPending}
               />
               <TextField
@@ -208,7 +207,7 @@ function SimulationDialog({
           )}
           {form.geo_state !== "unavailable" && (
             <TextField
-              label="手工地址库版本标识（可选）"
+              label="地址库版本（可选）"
               value={form.geo_version}
               onChange={(e) => set("geo_version", e.target.value)}
               disabled={simulation.isPending}
@@ -223,9 +222,8 @@ function SimulationDialog({
                 {reasons[simulation.data.reason] || simulation.data.reason}
               </Alert>
               <Typography variant="body2" color="text.secondary">
-                配置读取于 {fmtDate(simulation.data.observed_at)}；按{" "}
-                {fmtDate(simulation.data.evaluated_at)}{" "}
-                判断。结果对应云控期望配置，不表示边缘已应用。
+                云控配置读取时间 {fmtDate(simulation.data.observed_at)} ·
+                模拟时间 {fmtDate(simulation.data.evaluated_at)}
               </Typography>
               {!!simulation.data.chain.length && (
                 <TableFrame>
@@ -249,7 +247,7 @@ function SimulationDialog({
                             ? "草稿"
                             : layer.revision === "published"
                               ? "已发布"
-                              : "手工输入"}
+                              : "当前输入"}
                         </TableCell>
                         <TableCell>
                           {layer.decision.allowed ? "允许" : "拒绝"}
@@ -279,7 +277,7 @@ function SimulationDialog({
           onClick={submit}
           disabled={simulation.isPending}
         >
-          {simulation.isPending ? "模拟中…" : "模拟这次访问"}
+          {simulation.isPending ? "模拟中…" : "运行模拟"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -290,7 +288,7 @@ export default function ACLSimulation({
   target,
   title,
   protocol,
-  label = "模拟来源访问",
+  label = "访问模拟",
 }: {
   target: Target;
   title: string;

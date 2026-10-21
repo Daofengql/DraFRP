@@ -133,9 +133,7 @@ function RuleForm({
       return;
     }
     if (form.enabled && form.source_mode === "native" && !nativeAvailable) {
-      setValidation(
-        "设备未上报当前协议的 native IPv4 IP+端口能力，无法启用；可停用规则或选择普通转发。",
-      );
+      setValidation("设备未上报当前协议的原生保源能力");
       return;
     }
     if (sites) {
@@ -259,8 +257,8 @@ function RuleForm({
                 }}
                 helperText={
                   selectedDevice
-                    ? `控制会话${observedOnline(selectedDevice.last_seen) ? "近期在线" : "离线或未上报"}；目标服务尚未检查`
-                    : "目标地址由此 Agent 访问"
+                    ? `控制会话：${observedOnline(selectedDevice.last_seen) ? "近期在线" : "离线或未上报"}`
+                    : "回源设备"
                 }
               >
                 {devices.data?.items
@@ -285,7 +283,7 @@ function RuleForm({
                 helperText={
                   selectedEdge
                     ? `业务端口池 ${selectedEdge.port_min}–${selectedEdge.port_max}`
-                    : "选择可用节点"
+                    : undefined
                 }
               >
                 {edges.data?.items.map((e) => (
@@ -298,7 +296,7 @@ function RuleForm({
             {(!devices.data?.items.some((d) => !d.revoked) ||
               !edges.data?.items.length) && (
               <Alert severity="warning">
-                需要先绑定有效设备并登记可用边缘。
+                缺少可用设备或边缘节点。
                 <Button component={Link} to="/devices" size="small">
                   设备
                 </Button>
@@ -312,7 +310,7 @@ function RuleForm({
                   value={form.domain}
                   onChange={(e) => set("domain", e.target.value)}
                   required
-                  helperText="仅选择归属已验证域名；先在域名与证书页完成 DNS TXT 验证"
+                  helperText="已通过归属验证的域名"
                 >
                   {form.domain &&
                     !domains.data?.items.some(
@@ -320,7 +318,7 @@ function RuleForm({
                         d.domain === form.domain && d.status === "verified",
                     ) && (
                       <MenuItem value={form.domain} disabled>
-                        {form.domain}（尚未确认归属）
+                        {form.domain}（未验证）
                       </MenuItem>
                     )}
                   {domains.data?.items
@@ -334,7 +332,7 @@ function RuleForm({
                 {!domains.isLoading &&
                   !domains.data?.items.some((d) => d.status === "verified") && (
                     <Alert severity="warning">
-                      没有已验证域名。
+                      暂无已验证域名。
                       <Button component={Link} to="/certificates">
                         前往域名验证
                       </Button>
@@ -348,7 +346,7 @@ function RuleForm({
                     value={form.certificate_id}
                     required
                     onChange={(e) => set("certificate_id", e.target.value)}
-                    helperText="服务端会校验域名覆盖与有效期；先在证书页上传匹配证书"
+                    helperText="须覆盖入口域名且在有效期内"
                   >
                     {certificates.data?.items.map((c) => (
                       <MenuItem
@@ -367,7 +365,7 @@ function RuleForm({
                   onChange={(e) => set("target", e.target.value)}
                   required
                   placeholder="https://10.0.0.2:8443"
-                  helperText="回源协议与公网入口协议独立；HTTPS 回源继续验证证书"
+                  helperText="支持 HTTP / HTTPS；HTTPS 回源验证证书"
                 />
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                   <TextField
@@ -383,10 +381,9 @@ function RuleForm({
                     fullWidth
                   />
                 </Stack>
-                <Alert severity="info">
-                  来源模式：forwarded_headers。Agent
-                  覆写并注入可信来源头。HTTP(S) 站点不使用 TCP/UDP ACL。
-                </Alert>
+                <Typography variant="body2" color="text.secondary">
+                  来源模式：可信来源头
+                </Typography>
               </>
             ) : (
               <>
@@ -397,7 +394,7 @@ function RuleForm({
                     value={form.public_port}
                     onChange={(e) => set("public_port", Number(e.target.value))}
                     fullWidth
-                    helperText="0 = 提交时事务申请；候选空闲端口不代表已预留"
+                    helperText="0 = 保存时自动分配"
                     slotProps={{ htmlInput: { min: 0, max: 65535 } }}
                   />
                   <TextField
@@ -406,7 +403,7 @@ function RuleForm({
                     onChange={(e) => set("target", e.target.value)}
                     required
                     fullWidth
-                    helperText="该 Agent 可达的地址，IPv6 使用 [address]:port"
+                    helperText="Agent 可达的地址；IPv6 格式为 [address]:port"
                   />
                 </Stack>
                 <TextField
@@ -415,20 +412,19 @@ function RuleForm({
                   value={form.source_mode}
                   onChange={(e) => set("source_mode", e.target.value)}
                 >
-                  <MenuItem value="socket">socket · 普通转发</MenuItem>
+                  <MenuItem value="socket">普通转发</MenuItem>
                   <MenuItem value="native" disabled={!nativeAvailable}>
-                    native · Linux IPv4 透明 socket（保留来源 IP 和端口）
-                    {nativeAvailable ? "" : " · 设备未上报能力"}
+                    原生保源（Linux IPv4）
+                    {nativeAvailable ? "" : " · 能力未上报"}
                   </MenuItem>
                 </TextField>
-                <Alert
-                  severity={form.source_mode === "native" ? "warning" : "info"}
-                >
-                  {nativeAvailable
-                    ? "所选设备上报了当前协议的 Linux IPv4 透明 socket 能力。使用前需在目标网络配置回程与策略路由；来源 IP 和端口必须同时保留，失败时拒绝转发。"
-                    : "所选设备未上报当前协议的 native IPv4 IP+端口能力，无法启用原生保源。"}{" "}
-                  TUN 与 IPv6 保源尚未实现；接口存在不代表业务可用。
-                </Alert>
+                {form.source_mode === "native" && (
+                  <Alert severity={nativeAvailable ? "warning" : "error"}>
+                    {nativeAvailable
+                      ? "保留来源 IP 和端口，需配置目标网络回程与策略路由。"
+                      : "设备未上报当前协议的原生保源能力。"}
+                  </Alert>
+                )}
                 <TextField
                   select
                   label="已发布 ACL 模板"
@@ -436,14 +432,12 @@ function RuleForm({
                   onChange={(e) => set("acl_template_id", e.target.value)}
                   helperText={
                     templates.data?.items.length
-                      ? "默认模板用于新建规则；强制父策略始终叠加，不能通过改选绕过。"
-                      : "暂无已发布模板；不会预置 ACL 内容。"
+                      ? "强制父策略同时生效"
+                      : "暂无已发布模板"
                   }
                 >
                   <MenuItem value="">
-                    {initial
-                      ? "无模板 / 保留现有独立策略"
-                      : "使用平台默认（如有）"}
+                    {initial ? "无模板（保留独立策略）" : "平台默认"}
                   </MenuItem>
                   {templates.data?.items
                     .filter((t) => t.published || t.policy.version > 0)
@@ -463,7 +457,6 @@ function RuleForm({
                     <Alert key={t.id} severity="info">
                       强制父策略：{t.name} · 已发布 v
                       {t.published?.version || t.policy.version}
-                      ，与所选规则策略取交集。
                     </Alert>
                   ))}
               </>
@@ -476,7 +469,7 @@ function RuleForm({
                 onChange={(e) => set("transport", e.target.value)}
                 fullWidth
               >
-                <MenuItem value="auto">自动 · QUIC 优先 / TLS 兜底</MenuItem>
+                <MenuItem value="auto">自动（QUIC 优先，TLS 备用）</MenuItem>
                 <MenuItem value="quic_only">仅 QUIC</MenuItem>
                 <MenuItem value="tls_only">仅 TLS</MenuItem>
               </TextField>
@@ -499,9 +492,7 @@ function RuleForm({
               label="启用规则"
             />
             {initial && (
-              <Alert severity="warning">
-                修改设备、边缘、目标或策略，以及停用规则，可能中断现有连接。提交只保存期望配置，需等待真实应用反馈。
-              </Alert>
+              <Alert severity="warning">修改或停用规则可能中断现有连接。</Alert>
             )}
             {validation && <Alert severity="error">{validation}</Alert>}
             <MutationError
@@ -512,7 +503,7 @@ function RuleForm({
             {latest && (
               <Paper variant="outlined" sx={{ p: 2 }}>
                 <Typography fontWeight={700}>
-                  服务端最新配置 v{latest.version}
+                  最新配置 v{latest.version}
                 </Typography>
                 <Box
                   component="pre"
@@ -520,9 +511,7 @@ function RuleForm({
                 >
                   {JSON.stringify(latest, null, 2)}
                 </Box>
-                <Alert severity="info">
-                  当前表单未被覆盖。请核对差异；继续编辑可沿用当前输入，并以最新版本再次提交。
-                </Alert>
+                <Alert severity="info">当前输入已保留。</Alert>
                 <Button
                   onClick={() => {
                     setVersion(latest.version);
@@ -530,7 +519,7 @@ function RuleForm({
                     m.reset();
                   }}
                 >
-                  已比较，以 v{latest.version} 为基准继续编辑
+                  保留输入，使用 v{latest.version}
                 </Button>
               </Paper>
             )}
@@ -554,7 +543,7 @@ function RuleForm({
             edges.isError
           }
         >
-          {m.isPending ? "保存中…" : "保存并等待应用"}
+          {m.isPending ? "保存中…" : initial ? "保存" : "创建"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -593,11 +582,7 @@ export function RulesPage({ sites = false }: { sites?: boolean }) {
     <>
       <PageTitle
         title={title}
-        detail={
-          sites
-            ? "按域名路由，Agent 访问回源服务并注入可信来源头"
-            : "公网业务入口 → 边缘 → Agent → 目标服务"
-        }
+        detail={sites ? "域名路由与回源配置" : "TCP / UDP 公网转发规则"}
         action={
           <Button variant="contained" onClick={() => setForm("new")}>
             创建{sites ? "站点" : "隧道"}
@@ -643,9 +628,10 @@ export function RulesPage({ sites = false }: { sites?: boolean }) {
             title={
               q.data?.items.some((r) => isSite(r.protocol) === sites)
                 ? "没有匹配规则"
-                : `暂无${title}`
+                : sites
+                  ? "暂无站点"
+                  : "暂无隧道"
             }
-            detail="创建后将显示保存、应用与释放状态；目标健康独立显示。"
           />
         ) : (
           <>
@@ -774,8 +760,7 @@ export function RulesPage({ sites = false }: { sites?: boolean }) {
           label="提交删除"
         >
           <Typography>
-            现有连接可能中断。规则将先进入“正在释放”，边缘关闭或授权过期后才释放公网端口
-            / 域名；不会立即作为空闲资源重新分配。
+            删除将中断现有连接。公网端口和域名在边缘停止转发或授权到期后释放。
           </Typography>
         </Confirm>
       )}
@@ -852,11 +837,8 @@ export function RulePage() {
                     to={`/devices/${r.device_id}`}
                     sx={{ p: 0, justifyContent: "flex-start" }}
                   >
-                    查看承载与端点记录
+                    查看设备传输
                   </Button>
-                  <Typography variant="caption" display="block">
-                    逐规则传输与持续 RTT 尚未上报
-                  </Typography>
                 </DetailField>
                 <DetailField label="配置传输偏好">{r.transport}</DetailField>
                 <DetailField label="来源模式">{r.source_mode}</DetailField>
@@ -868,10 +850,6 @@ export function RulePage() {
               </Box>
             </Paper>
             {r.last_error && <Alert severity="error">{r.last_error}</Alert>}
-            <Alert severity="info">
-              边缘报告的配置应用只说明监听与承载配置已加载。目标是否可达尚未探测；自动传输偏好不代表当前实际已使用
-              QUIC。
-            </Alert>
             {r.source_mode === "native" && (
               <Alert
                 severity={
@@ -881,27 +859,24 @@ export function RulePage() {
                 }
               >
                 {nativeSourceCapability(r.protocol, d?.capabilities)
-                  ? "该规则要求 Linux IPv4 透明 socket，严格保留来源 IP 与端口。Agent 能力上报不代替目标网络的回程和策略路由；实际应用错误以服务反馈为准。"
-                  : "设备未上报匹配的 native IPv4 IP+端口能力，规则会拒绝承载并报告 capability_missing。"}
+                  ? "原生保源：保留来源 IP 和端口，需配置目标网络回程与策略路由。"
+                  : "设备未上报原生保源能力，规则停止转发。"}
               </Alert>
             )}
             {site ? (
               <Paper variant="outlined" sx={{ p: 3 }}>
                 <Typography variant="h6" gutterBottom>
-                  HTTP(S) 行为
+                  HTTP(S) 配置
                 </Typography>
                 <Typography>
-                  站点保存时已校验域名归属授权；当前 DNS
-                  业务路由连通尚未探测。公网证书{" "}
+                  公网证书：
                   {r.certificate_id || "无（HTTP 入口）"}
-                  ；是否已分发以运行应用反馈为准。
                 </Typography>
                 <Typography sx={{ mt: 1 }}>
-                  故障语义：Agent / 承载离线 503；回源连接或 TLS 失败 502；超时
-                  504。目标自己的响应保持原状。
+                  错误响应：连接离线 503，回源失败 502，回源超时 504。
                 </Typography>
                 <Typography sx={{ mt: 1 }}>
-                  Agent 注入可信来源头，覆写访问者自带的来源信息。
+                  来源信息：由 Agent 设置可信来源头
                 </Typography>
               </Paper>
             ) : (
@@ -925,7 +900,7 @@ export function RulePage() {
                     </Typography>
                   ))}
                 <Typography color="text.secondary" sx={{ mt: 1 }}>
-                  所有强制父策略与规则策略取交集。没有策略时不附带任何系统预置内容。
+                  强制父策略与规则策略取交集。
                 </Typography>
                 <ACLSimulation
                   target={{ rule_id: r.id }}

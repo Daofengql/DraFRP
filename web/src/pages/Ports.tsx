@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Alert,
   Button,
   Chip,
   MenuItem,
@@ -99,7 +98,7 @@ export default function PortsPage() {
     <>
       <PageTitle
         title="公网端口"
-        detail="查看各边缘的业务端口与系统保留端口"
+        detail="各边缘节点的端口分配状态"
         action={
           <Button
             onClick={() => ports.refetch()}
@@ -111,10 +110,7 @@ export default function PortsPage() {
       />
       <Load loading={edges.isPending} error={edges.error}>
         {!items.length ? (
-          <Empty
-            title="暂无边缘节点"
-            detail="请联系管理员添加边缘与业务端口池。"
-          />
+          <Empty title="暂无边缘节点" />
         ) : (
           <Stack spacing={2}>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
@@ -149,10 +145,6 @@ export default function PortsPage() {
                 <MenuItem value="udp">UDP</MenuItem>
               </TextField>
             </Stack>
-            <Alert severity="info">
-              “可申请”是查询时的状态。创建隧道时才会申请端口；同一数字的 TCP 与
-              UDP 可分别使用。
-            </Alert>
             <Load loading={ports.isPending} error={ports.error}>
               {ports.data && (
                 <>

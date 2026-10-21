@@ -51,21 +51,19 @@ export default function EdgeDetails({
             </Box>
           </Paper>
           {!runtime ? (
-            <Empty
-              title="尚无边缘运行观测"
-              detail="端点配置不代表已经监听；等待边缘上报实际监听、承载和活动流数量。"
-            />
+            <Empty title="暂无边缘运行数据" />
           ) : (
             <>
-              <Alert severity={fresh && authorized ? "info" : "warning"}>
-                {fresh
-                  ? "以下为边缘最近一次采样。"
-                  : "这份运行观测已过期，仅供排查上一次状态。"}{" "}
-                {authorized
-                  ? "采样对应的配置快照尚在有效期内。"
-                  : "采样对应的配置快照已过期，不能据此判定业务可用。"}{" "}
-                节点总量包含所有空间；不会替代目标健康检测。
-              </Alert>
+              {(!fresh || !authorized) && (
+                <Alert severity="warning">
+                  {!fresh && "运行数据已过期。"}
+                  {!authorized && "配置授权已到期。"}
+                  显示最近一次记录。
+                </Alert>
+              )}
+              <Typography variant="body2" color="text.secondary">
+                统计范围：全部空间
+              </Typography>
               <Paper variant="outlined" sx={{ p: 2 }}>
                 <Box className="detail-grid">
                   <DetailField label="采样时间">
@@ -86,13 +84,13 @@ export default function EdgeDetails({
                   <DetailField label="UDP 会话映射">
                     {runtime.udp_mappings}
                   </DetailField>
-                  <DetailField label="节点容量执行口径">
+                  <DetailField label="容量计量">
                     {runtime.capacity_enforcement === "wire"
-                      ? "传输线速（wire）"
+                      ? "接口发送速率"
                       : runtime.capacity_enforcement === "wire_failed"
-                        ? "线速限制失效（wire_failed）"
+                        ? "接口限速失败"
                         : runtime.capacity_enforcement === "payload"
-                          ? "业务载荷（payload）"
+                          ? "业务载荷"
                           : "未上报"}
                   </DetailField>
                   <DetailField label="GeoIP 数据库状态">
@@ -112,7 +110,6 @@ export default function EdgeDetails({
               {runtime.capacity_error && (
                 <Alert severity="error">
                   节点容量执行错误：{runtime.capacity_error}
-                  。请由边缘管理员检查接口、权限与整形器配置。
                 </Alert>
               )}
               {runtime.physical_interface && (
@@ -142,29 +139,19 @@ export default function EdgeDetails({
                     variant="body2"
                     sx={{ mt: 2 }}
                   >
-                    接口累计计数包含控制流量、封装与重传；按接口生命周期累积，不等于账号业务用量或瞬时速率。wire
-                    整形限制接口发出方向；接收方向只展示观测。
+                    接口生命周期累计流量，含协议开销及重传。限速方向：发送。
                   </Typography>
                 </Paper>
               )}
               {runtime.geoip_error && (
                 <Alert severity="error">
                   GeoIP 加载失败：{runtime.geoip_error}
-                  。带地区条件的规则会拒绝承载。
+                  。地区匹配规则停止转发。
                 </Alert>
               )}
-              {runtime.capacity_enforcement === "payload" && (
-                <Alert severity="info">
-                  节点容量当前按业务载荷执行。TLS / QUIC
-                  协议、加密与网络报文开销不计入此数值，不能当作物理接口线速上限。
-                </Alert>
-              )}
-              <Typography variant="h6">Agent 承载端点的实际监听</Typography>
+              <Typography variant="h6">Agent 承载端点</Typography>
               {!runtime.endpoints?.length ? (
-                <Empty
-                  title="采样时没有端点"
-                  detail="这可能是边缘尚未取得首个有效配置快照。"
-                />
+                <Empty title="暂无端点数据" />
               ) : (
                 <TableFrame>
                   <TableHead>

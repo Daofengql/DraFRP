@@ -85,7 +85,7 @@ function UserForm({
   const submit = () => {
     const bytes = new TextEncoder().encode(form.password).length;
     if ((!initial || form.password) && (bytes < 10 || bytes > 72)) {
-      setValidation("密码必须为 10–72 字节（中文等字符占多个字节）。");
+      setValidation("密码长度须为 10–72 字节");
       return;
     }
     const data = initial
@@ -154,7 +154,7 @@ function UserForm({
               onChange={(e) => set("tenant_id", e.target.value)}
               helperText="同空间用户共享设备、规则与账号配额"
             >
-              <MenuItem value="">为此用户创建新空间</MenuItem>
+              <MenuItem value="">新建空间</MenuItem>
               {tenants.map((t) => (
                 <MenuItem key={t} value={t}>
                   {t}
@@ -174,7 +174,7 @@ function UserForm({
                 label="停用账号"
               />
               <Alert severity="warning">
-                停用用户或重置密码会撤销已有登录会话。角色变更会由服务端重新校验权限。
+                停用账号或重置密码将使该用户退出登录。
               </Alert>
             </>
           )}
@@ -209,7 +209,7 @@ export function UsersPage() {
     <>
       <PageTitle
         title="用户与空间"
-        detail="同一空间共享资源和配额；平台角色独立于资源归属"
+        detail="用户账号、角色与空间归属"
         action={
           <Button variant="contained" onClick={() => setEditing("new")}>
             创建用户
@@ -331,7 +331,7 @@ function EdgeForm({
       setCopyMessage("令牌已复制");
     } catch {
       setReveal(true);
-      setCopyMessage("浏览器不允许自动复制，请选中令牌手动复制。");
+      setCopyMessage("复制失败，可选中令牌复制");
     }
   };
   const submit = () => {
@@ -375,8 +375,7 @@ function EdgeForm({
           {created ? (
             <>
               <Alert severity="success">
-                已登记 {created.name}。请在边缘服务配置对应 ID
-                和令牌，启动后等待实际同步。
+                {created.name} 已登记，等待节点连接。
               </Alert>
               <TextField
                 label="边缘 ID"
@@ -400,14 +399,14 @@ function EdgeForm({
                   onChange={(e) => set("public_host", e.target.value)}
                   required
                   fullWidth
-                  helperText="用户访问业务入口时使用的主机名 / IP"
+                  helperText="业务入口的主机名或 IP"
                 />
               </Stack>
               <TextField
                 label="业务监听地址（可选）"
                 value={form.listen_host}
                 onChange={(e) => set("listen_host", e.target.value)}
-                helperText="留空由边缘使用默认监听地址；不含端口"
+                helperText="不含端口；留空使用默认地址"
               />
               <Typography variant="h6">承载入口（Agent → 边缘）</Typography>
               {form.endpoints.map((ep, i) => (
@@ -476,13 +475,9 @@ function EdgeForm({
                 onChange={(e) => set("ca_cert", e.target.value)}
                 multiline
                 minRows={3}
-                helperText="留空使用系统可信证书；自签证书必须配置其 CA，Agent 不会跳过 TLS 校验"
+                helperText="留空使用系统信任库；自签证书需提供 CA"
               />
               <Typography variant="h6">公网业务端口池</Typography>
-              <Alert severity="info">
-                公网业务端口与承载入口独立。共享 HTTP(S) 端口填写 0
-                可关闭；端口冲突由服务端事务校验。
-              </Alert>
               <Box className="form-grid">
                 {(
                   [
@@ -501,15 +496,18 @@ function EdgeForm({
                     value={form[key]}
                     onChange={(e) => set(key, Number(e.target.value))}
                     helperText={
-                      key === "capacity_bps" ? "-1 = 不限，0 = 禁止" : undefined
+                      key === "capacity_bps"
+                        ? "-1 = 不限，0 = 禁止"
+                        : key === "http_port" || key === "https_port"
+                          ? "0 = 关闭"
+                          : undefined
                     }
                   />
                 ))}
               </Box>
               {initial && (
                 <Alert severity="warning">
-                  存在关联规则或仍在释放的资源时，服务端拒绝修改入口。请先迁移 /
-                  删除规则并等待资源释放。
+                  关联规则及资源全部释放后，才能修改入口。
                 </Alert>
               )}
             </>
@@ -517,14 +515,14 @@ function EdgeForm({
           {!initial && (
             <>
               <TextField
-                label="边缘令牌（仅本次显示与提交）"
+                label="边缘令牌"
                 type={reveal ? "text" : "password"}
                 value={form.token}
                 onChange={(e) => set("token", e.target.value)}
                 autoComplete="off"
                 required
                 slotProps={{ input: { readOnly: !!created } }}
-                helperText="使用密码学随机值；至少 24 字符，务必保存到边缘配置。关闭后不再显示。"
+                helperText="至少 24 字符，用于节点认证；仅本次显示"
               />
               <Stack direction="row" spacing={1}>
                 <Button onClick={() => setReveal(!reveal)}>
@@ -581,7 +579,7 @@ export function EdgesPage() {
     <>
       <PageTitle
         title="边缘与端口池"
-        detail="承载入口、业务监听及节点容量；连接状态来自实际心跳"
+        detail="节点入口、业务端口池与容量配置"
         action={
           <Button variant="contained" onClick={() => setEditing("new")}>
             登记边缘
@@ -590,10 +588,7 @@ export function EdgesPage() {
       />
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty
-            title="暂无边缘节点"
-            detail="登记节点身份与 Agent 可达的 QUIC / TLS 承载入口，再启动边缘服务。"
-          />
+          <Empty title="暂无边缘节点" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -693,9 +688,7 @@ export function EdgesPage() {
           error={del.error}
           busy={del.isPending}
         >
-          <Typography>
-            所有空间的关联规则和释放中的资源都会阻止删除。请先处理关联资源；当前页面规则计数仅包含当前空间。
-          </Typography>
+          <Typography>删除条件：所有空间的关联规则及资源均已释放。</Typography>
         </Confirm>
       )}
     </>
@@ -787,10 +780,6 @@ function QuotaForm({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Typography className="mono">{initial.tenant_id}</Typography>
-          <Alert severity="info">
-            速率使用 bit/s；流量与信用使用 byte。-1 = 不限，0 = 禁止；突发信用的
-            0 表示无额外信用。
-          </Alert>
           <Typography variant="h6">运行预算</Typography>
           {quotaFields.map(([key, label]) => (
             <TextField
@@ -798,6 +787,9 @@ function QuotaForm({
               type="number"
               label={label}
               value={form[key]}
+              helperText={
+                key === "burst_bytes" ? "0 = 无额外信用" : "-1 = 不限，0 = 禁止"
+              }
               onChange={(e) => {
                 setDirty(true);
                 setForm((f) => ({ ...f, [key]: Number(e.target.value) }));
@@ -818,7 +810,7 @@ function QuotaForm({
                 period_seconds: Number(e.target.value),
               }));
             }}
-            helperText="0 = 不限期；自动切期为 60–31622400 秒。变更周期会由服务端校验。"
+            helperText="0 = 不限期；周期范围 60–31622400 秒"
           />
           <Typography variant="body2">
             当前周期：{form.period_id || "未记录"} · 到期：
@@ -836,16 +828,11 @@ function QuotaForm({
                 setForm((f) => ({ ...f, [key]: Number(e.target.value) }));
               }}
               slotProps={{ htmlInput: { min: -1, max: 1000000, step: 1 } }}
-              helperText="-1 = 不限；0 = 不再允许新增"
+              helperText="-1 = 不限，0 = 禁止新增"
             />
           ))}
-          <Typography variant="body2" color="text.secondary">
-            设备按未撤销数量计；规则包含站点与等待释放的规则；端口按 TCP/UDP
-            分别计数，等待撤销确认或到期的旧端口继续占额；域名包含待验证记录。
-            降低上限会阻止继续增加资源，现有资源仍可编辑和删除。
-          </Typography>
           <Alert severity="warning">
-            缩减预算可能限制新连接、后续流量和授权续期；用量与已预留份额由服务端维护。
+            降低配额可能限制新增资源、连接和流量。
           </Alert>
           {validation && <Alert severity="error">{validation}</Alert>}
           <MutationError
@@ -870,7 +857,7 @@ function QuotaForm({
                   m.reset();
                 }}
               >
-                已比较，保留输入并使用最新版本
+                保留输入，使用最新版本
               </Button>
             </Paper>
           )}
@@ -893,16 +880,10 @@ export function QuotasPage() {
   const [editing, setEditing] = useState<Quota>();
   return (
     <>
-      <PageTitle
-        title="账号配额"
-        detail="同空间共享运行预算，以及设备、规则、端口和域名数量上限"
-      />
+      <PageTitle title="账号配额" detail="空间共享配额与资源数量上限" />
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty
-            title="暂无账号配额"
-            detail="创建用户与空间后由服务端生成配额记录。"
-          />
+          <Empty title="暂无账号配额" />
         ) : (
           <TableFrame>
             <TableHead>

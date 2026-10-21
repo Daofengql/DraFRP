@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Alert,
   Button,
   Dialog,
   DialogActions,
@@ -53,9 +52,6 @@ function Upload({ onClose }: { onClose: () => void }) {
       <DialogTitle>上传公网证书</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="info">
-            域名与有效期从证书解析。私钥只在本次上传中提交，查询、详情和后续编辑均不回显。
-          </Alert>
           <TextField
             label="证书名称"
             value={form.name}
@@ -73,7 +69,8 @@ function Upload({ onClose }: { onClose: () => void }) {
             autoComplete="off"
           />
           <TextField
-            label="私钥 PEM（仅提交）"
+            label="私钥 PEM"
+            helperText="上传后不可查看"
             value={form.key_pem}
             onChange={(e) => setForm({ ...form, key_pem: e.target.value })}
             multiline
@@ -121,7 +118,7 @@ export default function CertificatesPage() {
     <>
       <PageTitle
         title="域名与证书"
-        detail="公网 TLS 证书元信息与站点引用；私钥不回显"
+        detail="域名归属验证与 HTTPS 证书管理"
         action={
           <Button variant="contained" onClick={() => setUpload(true)}>
             上传证书
@@ -134,10 +131,7 @@ export default function CertificatesPage() {
       </Typography>
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty
-            title="暂无公网证书"
-            detail="HTTP 入口无需公网证书；HTTPS 入口需上传匹配的 PEM 证书链和私钥。"
-          />
+          <Empty title="暂无公网证书" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -176,9 +170,6 @@ export default function CertificatesPage() {
                           (r) => r.certificate_id === c.id,
                         ).length
                       : "未读取"}
-                    <Typography variant="caption" display="block">
-                      部署以站点应用反馈为准
-                    </Typography>
                   </TableCell>
                   <TableCell>
                     <Button
@@ -211,9 +202,7 @@ export default function CertificatesPage() {
             })
           }
         >
-          <Typography>
-            被站点引用的证书不能删除。请先切换关联站点证书，并等待规则应用与释放完成。
-          </Typography>
+          <Typography>证书引用全部解除后可删除。</Typography>
         </Confirm>
       )}
     </>

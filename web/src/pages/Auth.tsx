@@ -33,12 +33,10 @@ interface Fields {
 
 function authError(error: unknown) {
   if (error instanceof APIError) {
-    if (error.code === "username_exists")
-      return "该用户名已注册，请更换用户名或返回登录。";
-    if (error.code === "registration_disabled")
-      return "当前未开放注册，请联系管理员。";
-    if (error.code === "rate_limited") return "操作过于频繁，请稍后再试。";
-    if (error.status === 401) return "用户名或密码错误，请重新输入。";
+    if (error.code === "username_exists") return "用户名已被使用";
+    if (error.code === "registration_disabled") return "注册未开放";
+    if (error.code === "rate_limited") return "操作过于频繁，请稍后重试";
+    if (error.status === 401) return "用户名或密码错误";
   }
   return errorMessage(error);
 }
@@ -105,7 +103,7 @@ export default function AuthPage() {
           confirm_password: "",
           captcha_answer: "",
         });
-        setNotice("账号创建成功，请使用新账号登录。");
+        setNotice("注册成功");
         setParams(
           (previous) => {
             const next = new URLSearchParams(previous);
@@ -168,7 +166,7 @@ export default function AuthPage() {
             const size = new TextEncoder().encode(data.password).length;
             if (size < 10 || size > 72) {
               setError("password", {
-                message: "密码需为 10–72 字节，请使用较长且不重复的密码",
+                message: "密码长度须为 10–72 字节",
               });
               return;
             }
@@ -183,7 +181,7 @@ export default function AuthPage() {
           };
           if (captchaRequired) {
             if (!captcha.data || expired) {
-              setError("captcha_answer", { message: "请刷新验证码" });
+              setError("captcha_answer", { message: "验证码已失效" });
               return;
             }
             if (!data.captcha_answer?.trim()) {
@@ -200,17 +198,8 @@ export default function AuthPage() {
         <Typography variant="h4" fontWeight={800} color="primary">
           DraFRP
         </Typography>
-        <Typography component="h1" variant="h6" sx={{ mt: 1 }}>
+        <Typography component="h1" variant="h6" sx={{ mt: 1, mb: 3 }}>
           {registering ? "创建账号" : "登录控制台"}
-        </Typography>
-        <Typography
-          color="text.secondary"
-          variant="body2"
-          sx={{ mt: 0.5, mb: 3 }}
-        >
-          {registering
-            ? "创建账号后即可绑定设备、管理自己的隧道。"
-            : "管理设备、隧道与站点。"}
         </Typography>
         <Stack spacing={2}>
           {notice && <Alert severity="success">{notice}</Alert>}
@@ -234,9 +223,7 @@ export default function AuthPage() {
           {registering &&
             options.data &&
             !options.data.registration_enabled && (
-              <Alert severity="info">
-                当前未开放注册，请联系管理员创建账号。
-              </Alert>
+              <Alert severity="info">注册未开放</Alert>
             )}
           {auth.error && (
             <Alert severity="error">{authError(auth.error)}</Alert>
@@ -257,7 +244,7 @@ export default function AuthPage() {
             error={!!errors.password}
             helperText={
               errors.password?.message ||
-              (registering ? "10–72 字节，建议使用密码管理器生成" : undefined)
+              (registering ? "10–72 字节" : undefined)
             }
             type="password"
             autoComplete={registering ? "new-password" : "current-password"}
@@ -311,20 +298,15 @@ export default function AuthPage() {
               </Stack>
               {captcha.error && (
                 <Alert severity="error">
-                  验证码加载失败，请重试：{errorMessage(captcha.error)}
+                  验证码加载失败：{errorMessage(captcha.error)}
                 </Alert>
               )}
-              {expired && (
-                <Alert severity="warning">验证码已过期，请换一张。</Alert>
-              )}
+              {expired && <Alert severity="warning">验证码已过期</Alert>}
               <TextField
                 label="验证码"
                 {...register("captcha_answer")}
                 error={!!errors.captcha_answer}
-                helperText={
-                  errors.captcha_answer?.message ||
-                  "请输入图片中的字符，不区分大小写"
-                }
+                helperText={errors.captcha_answer?.message || "不区分大小写"}
                 autoComplete="off"
                 inputProps={{ maxLength: 12 }}
                 required
@@ -358,7 +340,7 @@ export default function AuthPage() {
           </Button>
           {(registering || options.data?.registration_enabled) && (
             <Button type="button" onClick={toggle} disabled={auth.isPending}>
-              {registering ? "已有账号？返回登录" : "没有账号？创建账号"}
+              {registering ? "返回登录" : "创建账号"}
             </Button>
           )}
         </Stack>

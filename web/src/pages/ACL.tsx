@@ -97,7 +97,7 @@ function TemplateForm({
   };
   return (
     <Dialog open onClose={close} fullWidth maxWidth="md">
-      <DialogTitle>{initial ? "编辑 ACL 草稿" : "创建空 ACL 草稿"}</DialogTitle>
+      <DialogTitle>{initial ? "编辑 ACL 草稿" : "创建 ACL 模板"}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
@@ -112,30 +112,24 @@ function TemplateForm({
           />
           <TextField
             select
-            label="未匹配时的默认动作"
+            label="默认动作"
             value={action}
             onChange={(e) => {
               setDirty(true);
               setAction(e.target.value);
             }}
-            helperText="动作由管理员选择；不会自动加入 CIDR、地区或预制条目"
+            helperText="未命中条目时执行"
           >
-            <MenuItem value="deny">拒绝 deny</MenuItem>
-            <MenuItem value="allow">允许 allow</MenuItem>
+            <MenuItem value="deny">拒绝</MenuItem>
+            <MenuItem value="allow">允许</MenuItem>
           </TextField>
-          {initial ? (
+          {initial && (
             <>
-              <Typography variant="h6">草稿条目</Typography>
+              <Typography variant="h6">匹配条目</Typography>
               <Typography variant="body2" color="text.secondary">
-                按 priority 从小到大匹配，命中首条执行动作；协议留空匹配
-                TCP/UDP，端口留空不额外限制。列表字段以逗号、空格或换行分隔；国家与地区完全由管理员填写。
+                按优先级升序匹配，执行首条命中的动作。多值字段以逗号、空格或换行分隔。
               </Typography>
-              {!entries.length && (
-                <Empty
-                  title="草稿中没有匹配条目"
-                  detail="发布后所有流量使用上方的默认动作。"
-                />
-              )}
+              {!entries.length && <Empty title="暂无匹配条目" />}
               {entries.map((entry, i) => (
                 <Paper variant="outlined" key={entry.id} sx={{ p: 2 }}>
                   <Stack spacing={2}>
@@ -154,8 +148,8 @@ function TemplateForm({
                         value={entry.action}
                         onChange={(e) => update(i, { action: e.target.value })}
                       >
-                        <MenuItem value="allow">允许 allow</MenuItem>
-                        <MenuItem value="deny">拒绝 deny</MenuItem>
+                        <MenuItem value="allow">允许</MenuItem>
+                        <MenuItem value="deny">拒绝</MenuItem>
                       </TextField>
                       <TextField
                         select
@@ -182,7 +176,8 @@ function TemplateForm({
                       />
                     </Box>
                     <TextField
-                      label="来源 CIDR（可选；留空匹配所有来源）"
+                      label="来源 CIDR（可选）"
+                      helperText="留空匹配全部来源"
                       multiline
                       minRows={2}
                       defaultValue={(entry.cidrs || []).join("\n")}
@@ -198,7 +193,7 @@ function TemplateForm({
                         multiline
                         minRows={2}
                         defaultValue={(entry.countries || []).join("\n")}
-                        helperText="两位大写字母；不预填任何国家集合"
+                        helperText="两位大写字母"
                         onBlur={(e) =>
                           update(i, {
                             countries: e.target.value
@@ -212,7 +207,7 @@ function TemplateForm({
                         multiline
                         minRows={2}
                         defaultValue={(entry.regions || []).join("\n")}
-                        helperText="COUNTRY-REGION；大写字母、数字与连字符，总长 4–16"
+                        helperText="COUNTRY-REGION 格式，4–16 个字符"
                         onBlur={(e) =>
                           update(i, {
                             regions: e.target.value
@@ -224,7 +219,7 @@ function TemplateForm({
                     </Box>
                     <TextField
                       select
-                      label="GeoIP 未知来源动作"
+                      label="地域未知时的动作"
                       value={entry.geo_unknown_action || ""}
                       required={
                         !!(entry.countries?.length || entry.regions?.length)
@@ -235,18 +230,16 @@ function TemplateForm({
                             undefined) as ACLEntry["geo_unknown_action"],
                         })
                       }
-                      helperText="有国家或地区条件时必须显式选择；无地区条件时此字段不会发送"
+                      helperText="设置国家或地区条件时必填"
                     >
                       <MenuItem value="">请选择</MenuItem>
-                      <MenuItem value="deny">立即拒绝 deny</MenuItem>
-                      <MenuItem value="no_match">
-                        跳过本条，继续匹配 no_match
-                      </MenuItem>
+                      <MenuItem value="deny">拒绝</MenuItem>
+                      <MenuItem value="no_match">继续匹配</MenuItem>
                     </TextField>
                     {!!(entry.countries?.length || entry.regions?.length) && (
                       <Alert severity="warning">
-                        地区条件依赖边缘管理员提供有效 GeoIP
-                        数据库。数据库缺失或无效时规则拒绝承载；未知来源动作只用于有效数据库中未识别的来源。国家与地区同时填写时，需同时匹配。
+                        地区匹配依赖 GeoIP
+                        数据库，不可用时停止转发。国家与地区条件取交集。
                       </Alert>
                     )}
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
@@ -296,11 +289,8 @@ function TemplateForm({
                   ]);
                 }}
               >
-                添加空条目
+                添加条目
               </Button>
-              <Alert severity="info">
-                保存草稿不会改变线上已发布策略。默认模板与强制父策略需在“绑定设置”单独修改。
-              </Alert>
               <ACLSimulation
                 target={{
                   policy: {
@@ -310,13 +300,9 @@ function TemplateForm({
                   },
                 }}
                 title={`${name} · 当前输入`}
-                label="模拟当前草稿（不保存）"
+                label="模拟草稿"
               />
             </>
-          ) : (
-            <Alert severity="info">
-              首次只创建空草稿。创建后可添加条目并发布；发布前不能绑定为默认或强制策略。
-            </Alert>
           )}
           {validation && <Alert severity="error">{validation}</Alert>}
           <MutationError
@@ -342,7 +328,7 @@ function TemplateForm({
                   m.reset();
                 }}
               >
-                已比较，保留输入并使用最新版本
+                保留输入，使用最新版本
               </Button>
             </Paper>
           )}
@@ -357,7 +343,7 @@ function TemplateForm({
           disabled={!name.trim() || m.isPending}
           onClick={submit}
         >
-          {m.isPending ? "保存中…" : initial ? "保存草稿" : "创建空草稿"}
+          {m.isPending ? "保存中…" : initial ? "保存草稿" : "创建模板"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -388,8 +374,7 @@ function BindingSettings({
       <DialogContent>
         <Stack spacing={2}>
           <Typography>
-            设置针对已发布 v{template.published?.version || "—"}
-            ，不会发布草稿中的改动。
+            绑定版本：v{template.published?.version || "—"}
           </Typography>
           <FormControlLabel
             control={
@@ -398,7 +383,7 @@ function BindingSettings({
                 onChange={(e) => setDef(e.target.checked)}
               />
             }
-            label="作为新建 TCP/UDP 规则的默认模板"
+            label="新建 TCP/UDP 规则的默认模板"
           />
           <FormControlLabel
             control={
@@ -407,11 +392,10 @@ function BindingSettings({
                 onChange={(e) => setMandatory(e.target.checked)}
               />
             }
-            label="作为所有 TCP/UDP 规则的强制父策略"
+            label="全部 TCP/UDP 规则的强制父策略"
           />
           <Alert severity="warning">
-            默认选择只影响后续新建规则。强制策略会叠加到全部 TCP/UDP
-            规则，与规则自身策略取交集；收紧设置可能关闭现有连接。
+            强制父策略与规则策略取交集。收紧策略可能中断现有连接。
           </Alert>
           <MutationError error={m.error} />
         </Stack>
@@ -458,22 +442,16 @@ export default function ACLPage() {
     <>
       <PageTitle
         title="TCP/UDP ACL 模板"
-        detail="从空草稿开始，管理员独立维护、发布和绑定策略"
+        detail="TCP/UDP 来源访问策略"
         action={
           <Button variant="contained" onClick={() => setEditing("new")}>
-            创建空模板
+            创建模板
           </Button>
         }
       />
-      <Alert severity="info" sx={{ mb: 2 }}>
-        HTTP(S) 站点不使用这些模板。系统不预置 CIDR、地区集合或其他策略内容。
-      </Alert>
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty
-            title="暂无 ACL 模板"
-            detail="创建空模板后自行添加匹配字段与动作；保存草稿与发布是两个独立操作。"
-          />
+          <Empty title="暂无 ACL 模板" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -493,10 +471,10 @@ export default function ACLPage() {
                     <Typography className="mono">{t.id}</Typography>
                   </TableCell>
                   <TableCell>
-                    资源 v{t.version}
+                    v{t.version}
                     <Typography variant="caption" display="block">
                       {t.policy.entries.length} 条 · 默认{" "}
-                      {t.policy.default_action}
+                      {t.policy.default_action === "allow" ? "允许" : "拒绝"}
                     </Typography>
                   </TableCell>
                   <TableCell>
@@ -586,7 +564,7 @@ export default function ACLPage() {
       )}
       {publishing && (
         <Confirm
-          title={`发布 ${publishing.name} 的当前草稿`}
+          title={`发布模板 ${publishing.name}`}
           onClose={() => setPublishing(undefined)}
           onConfirm={() =>
             publish.mutate({
@@ -597,33 +575,30 @@ export default function ACLPage() {
           }
           error={publish.error}
           busy={publish.isPending}
-          label="发布当前草稿"
+          label="发布"
         >
           <Typography>
-            草稿有 {publishing.policy.entries.length} 条匹配，默认动作为{" "}
-            {publishing.policy.default_action}。当前空间直接引用{" "}
+            {publishing.policy.entries.length} 条匹配，默认动作：
+            {publishing.policy.default_action === "allow" ? "允许" : "拒绝"}
+            。当前空间引用：
             {rules.data?.items.filter(
               (r) => r.acl_template_id === publishing.id,
             ).length ?? "未知数量"}{" "}
-            条规则；其他空间引用也会受影响。
+            条规则。发布影响所有空间的引用规则。
           </Typography>
           {publishing.mandatory && (
             <Alert severity="warning">
-              这是强制父策略，发布影响所有空间的 TCP/UDP 规则。
+              强制父策略：发布影响全部 TCP/UDP 规则。
             </Alert>
           )}
           {!publishing.policy.entries.length && (
             <Alert severity="warning">
-              空策略发布后，对所有流量执行默认{" "}
-              {publishing.policy.default_action}。
               {publishing.policy.default_action === "deny"
-                ? "这将拒绝所有匹配范围内流量。"
-                : "这将允许所有匹配范围内流量，但仍受其他强制策略约束。"}
+                ? "无匹配条目，默认拒绝全部流量。"
+                : "无匹配条目，默认允许全部流量；强制父策略仍然生效。"}
             </Alert>
           )}
-          <Typography>
-            收紧策略可能中断现有连接。发布后等待边缘实际应用，不把提交成功当作生效完成。
-          </Typography>
+          <Typography>收紧策略可能中断现有连接。发布后由边缘应用。</Typography>
         </Confirm>
       )}
       {deleting && (
@@ -640,7 +615,7 @@ export default function ACLPage() {
           busy={del.isPending}
         >
           <Typography>
-            请先解除所有规则引用、默认选择与强制标志。服务端会检查其他空间的引用后再删除。
+            删除条件：无规则引用，且未设为默认模板或强制父策略。
           </Typography>
         </Confirm>
       )}

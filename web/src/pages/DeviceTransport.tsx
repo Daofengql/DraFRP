@@ -26,7 +26,7 @@ function QualityObservation({ quality }: { quality?: CarrierQualityRuntime }) {
   if (!quality || !summary)
     return (
       <Typography variant="body2" color="text.secondary">
-        未观测；等待探测或对端版本未支持。
+        暂无 RTT 数据
       </Typography>
     );
   const native = quality.quic;
@@ -43,9 +43,9 @@ function QualityObservation({ quality }: { quality?: CarrierQualityRuntime }) {
         {fmtDate(quality.observed_at)}
       </Typography>
       <Typography variant="caption">
-        最近成功 {fmtDate(quality.last_success_at)}；每{" "}
-        {quality.interval_ms / 1000} 秒探测，{quality.timeout_ms / 1000}{" "}
-        秒超时，最多 {quality.window_limit} 次。
+        最近成功 {fmtDate(quality.last_success_at)} · 间隔{" "}
+        {quality.interval_ms / 1000} 秒 · 超时 {quality.timeout_ms / 1000} 秒 ·
+        窗口 {quality.window_limit} 次
       </Typography>
       {native?.source === "quic_go_rfc9002" && (
         <>
@@ -55,7 +55,7 @@ function QualityObservation({ quality }: { quality?: CarrierQualityRuntime }) {
             {milliseconds(native.min_rtt_ms)}
           </Typography>
           <Typography variant="caption">
-            quic-go / RFC 9002：发送 {native.packets_sent} 包，接收{" "}
+            QUIC 包统计：发送 {native.packets_sent} 包，接收{" "}
             {native.packets_received} 包，当前判丢 {native.packets_lost} 包 /{" "}
             {native.bytes_lost} 字节。
           </Typography>
@@ -71,12 +71,7 @@ function QualityObservation({ quality }: { quality?: CarrierQualityRuntime }) {
 
 export default function DeviceTransport({ device }: { device: Device }) {
   const runtime = device.runtime;
-  if (!runtime)
-    return (
-      <Alert severity="info">
-        尚无当前会话的传输观测。控制会话在线不代表边缘承载或目标服务可用。
-      </Alert>
-    );
+  if (!runtime) return <Alert severity="info">暂无传输数据</Alert>;
   const current =
     !device.revoked &&
     runtime.session_id === device.session_id &&
@@ -88,14 +83,10 @@ export default function DeviceTransport({ device }: { device: Device }) {
     <Stack spacing={2}>
       <Typography variant="h6">Agent 传输观测</Typography>
       {!current && (
-        <Alert severity="warning">
-          此观测已过期或不属于当前会话，以下仅保留最后快照，不代表当前承载可用。
-        </Alert>
+        <Alert severity="warning">传输数据已失效，显示最近一次记录。</Alert>
       )}
       {runtime.truncated && (
-        <Alert severity="info">
-          观测条目已截断，列表仅显示本次上报的部分端点和承载。
-        </Alert>
+        <Alert severity="info">数据已截断，当前显示部分端点和承载。</Alert>
       )}
       <Paper variant="outlined" sx={{ p: 3 }}>
         <div className="detail-grid">
@@ -113,7 +104,7 @@ export default function DeviceTransport({ device }: { device: Device }) {
             {runtime.active_carriers} · QUIC {runtime.quic_carriers} / TLS{" "}
             {runtime.tls_carriers}
           </DetailField>
-          <DetailField label="快照授权期限">
+          <DetailField label="配置授权到期">
             {fmtDate(runtime.snapshot_expires_at)}
           </DetailField>
         </div>
@@ -228,13 +219,9 @@ export default function DeviceTransport({ device }: { device: Device }) {
           </TableBody>
         </TableFrame>
       )}
-      <Alert severity="info">
-        控制流往返来自已认证承载上的固定请求与回显，包含承载排队和对端处理；握手耗时与目标应用耗时分别计算。探测超时率不等于链路
-        IP 丢包率。QUIC ACK RTT 与包统计来自
-        quic-go，当前判丢数可能因迟到包而下降，不是累计重传次数，也不推算丢包比例。TLS
-        不提供这些 QUIC 统计。采样时建立的承载不代表目标服务健康；恢复 QUIC
-        会供新流选择，已有流继续使用原承载。
-      </Alert>
+      <Typography variant="body2" color="text.secondary">
+        RTT：承载控制流往返时间，包含排队与处理耗时。
+      </Typography>
     </Stack>
   );
 }

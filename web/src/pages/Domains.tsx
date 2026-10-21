@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Alert,
   Button,
   Dialog,
   DialogActions,
@@ -68,16 +67,9 @@ export default function Domains() {
           添加域名
         </Button>
       </Stack>
-      <Alert severity="info" sx={{ mb: 2 }}>
-        先通过 DNS TXT 验证域名归属，再创建 HTTP(S) 站点。业务 DNS
-        仍需指向边缘公网入口，归属验证不等于路由连通。
-      </Alert>
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty
-            title="暂无已登记域名"
-            detail="添加自己的域名后按指引设置 DNS TXT 记录。"
-          />
+          <Empty title="暂无域名" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -142,7 +134,7 @@ export default function Domains() {
               onChange={(e) => setDomain(e.target.value)}
               required
               autoFocus
-              helperText="填写入口域名，不含协议、端口或路径"
+              helperText="不含协议、端口或路径"
             />
             <MutationError error={create.error} />
           </Stack>
@@ -181,9 +173,7 @@ export default function Domains() {
             {challenge && (
               <>
                 <Status value={challenge.status} />
-                <Typography>
-                  在域名的 DNS 服务商添加以下 TXT 记录。等待记录生效后点击验证。
-                </Typography>
+                <Typography>验证记录：DNS TXT</Typography>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="caption">记录名称</Typography>
                   <Typography className="mono" sx={{ userSelect: "all" }}>
@@ -231,9 +221,7 @@ export default function Domains() {
           busy={del.isPending}
           error={del.error}
         >
-          <Typography>
-            仍被站点引用的域名不能删除。删除后重新使用需要重新验证归属。
-          </Typography>
+          <Typography>无站点引用时可删除。重新添加后需验证归属。</Typography>
         </Confirm>
       )}
     </>

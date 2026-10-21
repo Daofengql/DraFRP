@@ -92,14 +92,14 @@ interface Applications {
   }>;
 }
 const states: Record<string, string> = {
-  applied: "已确认应用",
-  pending: "等待实际确认",
+  applied: "已应用",
+  pending: "待确认",
   error: "应用失败",
-  inactive: "已确认停用",
-  expired: "应用租约已过期",
+  inactive: "已停用",
+  expired: "应用授权已到期",
 };
 const kinds: Record<string, string> = {
-  mandatory_template: "强制父模板",
+  mandatory_template: "强制父策略",
   rule_template: "规则模板",
   rule_inline: "规则独立策略",
 };
@@ -119,30 +119,28 @@ function ApplicationEvidence({ value }: { value: Application }) {
         }
       >
         {states[value.state] || value.state}
-        {value.stale ? " · 反馈超过一分钟未更新" : ""}
+        {value.stale ? " · 反馈已过期" : ""}
       </Alert>
       <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-        期望规则 v{value.rule_version} · 边缘 {value.edge_name} · 当前启动{" "}
+        期望规则 v{value.rule_version} · 边缘 {value.edge_name} · 启动标识{" "}
         {value.boot_id || "尚未启动"}
       </Typography>
       {value.ack ? (
         <>
           <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-            实际反馈：规则 v{value.ack.rule_version} · 启动 {value.ack_boot_id}{" "}
-            · 应用于 {fmtDate(value.ack.applied_at)} · 租约到期{" "}
+            应用反馈：规则 v{value.ack.rule_version} · 启动 {value.ack_boot_id}{" "}
+            · 应用时间 {fmtDate(value.ack.applied_at)} · 授权到期{" "}
             {fmtDate(value.ack.expires_at)}
           </Typography>
           <Typography variant="body2">
             活跃流 {value.ack.active_flows}，采样于{" "}
-            {fmtDate(value.ack.sampled_at)}；反馈截点{" "}
+            {fmtDate(value.ack.sampled_at)}；反馈时间{" "}
             {fmtDate(value.observed_at)}
           </Typography>
           {value.ack.error && <Alert severity="error">{value.ack.error}</Alert>}
         </>
       ) : (
-        <Typography variant="body2">
-          尚无实际应用 ACK，云控提交或快照已下发不能证明生效。
-        </Typography>
+        <Typography variant="body2">暂无边缘应用反馈</Typography>
       )}
     </Stack>
   );
@@ -168,41 +166,36 @@ function ObservationDialog({
   });
   return (
     <Dialog open fullWidth maxWidth="lg" onClose={onClose}>
-      <DialogTitle>ACL 实际访问观测 · {title}</DialogTitle>
+      <DialogTitle>ACL 访问统计 · {title}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="info">
-            TCP 按每次进入 ACL 的连接判断计数；UDP 按每个进入 ACL
-            的报文计数。模拟与后台复核不计入。ACL
-            允许只表示来源策略允许，目标是否可达需另行验证。各策略层与规则合计分开显示，不能相加。
-          </Alert>
+          <Typography variant="body2" color="text.secondary">
+            TCP 按连接、UDP 按报文统计；规则合计与各策略层分别计数。
+          </Typography>
           <Load loading={q.isLoading} error={q.error}>
             {q.data && (
               <>
                 <ApplicationEvidence value={q.data.application} />
                 <Typography variant="body2" color="text.secondary">
-                  计数按启动、规则版本及有效策略摘要隔离，保存{" "}
-                  {q.data.retention_days} 天。每个边缘最多保留 8192
-                  个计数标签；没有访问观测时，证据不足。历史记录不代表当前配置。
+                  保留 {q.data.retention_days}{" "}
+                  天，按边缘启动、规则版本和策略分组。
                 </Typography>
                 {Object.entries(q.data.collection_loss).some(
                   ([, n]) => n > 0,
                 ) && (
                   <Alert severity="warning">
-                    采集达到容量限制，统计不完整：边缘丢弃{" "}
-                    {q.data.collection_loss.edge_dropped || 0}{" "}
-                    次标签写入，云控丢弃{" "}
-                    {q.data.collection_loss.cloud_dropped || 0}{" "}
-                    次新增观测或反馈记录。
+                    采集容量已满，部分统计缺失。边缘丢弃{" "}
+                    {q.data.collection_loss.edge_dropped || 0} 次写入，云控丢弃{" "}
+                    {q.data.collection_loss.cloud_dropped || 0} 条记录。
                   </Alert>
                 )}
                 {!q.data.items.length ? (
-                  <Alert severity="info">没有访问观测，证据不足。</Alert>
+                  <Alert severity="info">暂无访问统计</Alert>
                 ) : (
                   <TableFrame>
                     <TableHead>
                       <TableRow>
-                        <TableCell>配置身份</TableCell>
+                        <TableCell>配置版本</TableCell>
                         <TableCell>命中层 / 条目</TableCell>
                         <TableCell>允许</TableCell>
                         <TableCell>拒绝</TableCell>
@@ -288,7 +281,7 @@ export default function ACLObservations({
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button onClick={() => setOpen(true)}>实际访问与应用反馈</Button>
+      <Button onClick={() => setOpen(true)}>访问统计与应用状态</Button>
       {open && (
         <ObservationDialog
           ruleId={ruleId}
@@ -317,14 +310,9 @@ function ApplicationsDialog({
   });
   return (
     <Dialog open fullWidth maxWidth="lg" onClose={onClose}>
-      <DialogTitle>模板在各边缘的实际应用</DialogTitle>
+      <DialogTitle>模板应用状态</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="info">
-            状态来自边缘完成编译、切换及旧流处理后回传的
-            ACK。新发布版本、规则版本变化或边缘重新启动后，需重新确认；没有 ACK
-            显示等待实际确认。
-          </Alert>
           <Load loading={q.isLoading} error={q.error}>
             {q.data && (
               <>
@@ -337,14 +325,12 @@ function ApplicationsDialog({
                 </Typography>
                 {q.data.truncated && (
                   <Alert severity="warning">
-                    受影响规则超过 {q.data.rule_limit} 条，本页仅显示前{" "}
-                    {q.data.rule_limit} 条，汇总不完整。
+                    规则超过 {q.data.rule_limit} 条，当前显示前{" "}
+                    {q.data.rule_limit} 条。
                   </Alert>
                 )}
                 {!q.data.items.length && (
-                  <Alert severity="info">
-                    当前没有引用此发布模板的 TCP/UDP 规则。
-                  </Alert>
+                  <Alert severity="info">暂无引用规则</Alert>
                 )}
                 {q.data.items.map((edge) => (
                   <Box
@@ -395,7 +381,7 @@ export function ACLApplications({ templateId }: { templateId: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button onClick={() => setOpen(true)}>边缘应用反馈</Button>
+      <Button onClick={() => setOpen(true)}>应用状态</Button>
       {open && (
         <ApplicationsDialog
           templateId={templateId}

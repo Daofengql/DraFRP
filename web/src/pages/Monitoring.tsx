@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Alert,
   Box,
   Button,
   Paper,
@@ -80,11 +79,9 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
       <PageTitle
         title={platform ? "平台概览" : "概览"}
         detail={
-          platform
-            ? "节点登记与平台资源运行概况"
-            : "当前空间的设备、规则及已上报业务用量"
+          platform ? "平台节点与资源状态" : "当前空间的设备、隧道与业务用量"
         }
-        action={<Button onClick={() => q.refetch()}>刷新快照</Button>}
+        action={<Button onClick={() => q.refetch()}>刷新</Button>}
       />
       <Load loading={q.isPending} error={q.error}>
         {q.data && (
@@ -130,15 +127,12 @@ export function OverviewPage({ platform = false }: { platform?: boolean }) {
           </Box>
         )}
       </Load>
-      <Alert severity="info" sx={{ mb: 3 }}>
-        设备控制会话、规则应用与目标健康分别判断。目标未检查时不显示为健康；暂无统计时不补画流量曲线。
-      </Alert>
       <Typography variant="h6" sx={{ mb: 1 }}>
-        当前空间需处理的规则
+        当前空间待处理规则
       </Typography>
       <Load loading={rules.isLoading} error={rules.error}>
         {!issues.length ? (
-          <Empty title="暂无待处理规则" detail="目标连通性尚未进行独立探测。" />
+          <Empty title="暂无待处理规则" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -187,7 +181,7 @@ export function UsagePage() {
     <>
       <PageTitle
         title="账号共享用量"
-        detail="同空间设备、规则和边缘共享账号预算；业务计量不等于网卡物理流量"
+        detail="空间共享配额与业务用量"
         action={
           <Button
             onClick={() => {
@@ -244,12 +238,12 @@ export function UsagePage() {
           </>
         )}
       </Load>
-      <Alert severity="info" sx={{ mb: 2 }}>
-        每行是边缘授权的一次累计观测，不将同一授权的多个批次相加。显示服务端观测时间；没有窗口采样时不估算瞬时速率或绘制秒级曲线。
-      </Alert>
+      <Typography variant="h6" sx={{ mb: 2 }}>
+        边缘累计业务用量
+      </Typography>
       <Load loading={q.isLoading} error={q.error}>
         {!q.data?.items.length ? (
-          <Empty title="暂无用量统计" detail="等待边缘上报首个业务计量批次。" />
+          <Empty title="暂无用量统计" />
         ) : (
           <TableFrame>
             <TableHead>
@@ -291,10 +285,7 @@ export function AuditPage() {
   const q = useResource<Audit>("/audit", "audit");
   return (
     <>
-      <PageTitle
-        title="审计与系统"
-        detail="配置与授权操作记录，以及当前数据库和临时存储状态"
-      />
+      <PageTitle title="审计与系统" detail="操作记录与系统状态" />
       <SystemPanel />
       <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
         操作审计
