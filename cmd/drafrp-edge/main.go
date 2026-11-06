@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 )
 
@@ -20,6 +21,9 @@ func main() {
 	if *version {
 		fmt.Println(buildinfo.String())
 		return
+	}
+	if runtime.GOOS != "linux" {
+		log.Fatal("drafrp-edge is supported on Linux; Windows supports the socket client only")
 	}
 	var cfg edge.Config
 	if e := config.Read(*path, &cfg); e != nil {

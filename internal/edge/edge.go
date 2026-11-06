@@ -35,6 +35,8 @@ type Config struct {
 	CertFile             string          `json:"cert_file"`
 	KeyFile              string          `json:"key_file"`
 	ListenHost           string          `json:"listen_host"`
+	CarrierListenHosts   []string        `json:"carrier_listen_hosts,omitempty"`
+	HTTPListenHosts      []string        `json:"http_listen_hosts,omitempty"`
 	SyncInterval         time.Duration   `json:"sync_interval"`
 	BootID               string          `json:"-"`
 	MaxConnections       int             `json:"max_connections"`
@@ -53,6 +55,15 @@ func (c *Config) defaults() {
 	}
 	if c.ListenHost == "" {
 		c.ListenHost = "0.0.0.0"
+	}
+	if c.CarrierListenHosts == nil {
+		c.CarrierListenHosts = []string{c.ListenHost}
+		if c.ListenHost == "0.0.0.0" {
+			c.CarrierListenHosts = append(c.CarrierListenHosts, "::")
+		}
+	}
+	if c.HTTPListenHosts == nil {
+		c.HTTPListenHosts = append([]string(nil), c.CarrierListenHosts...)
 	}
 	if c.BootID == "" {
 		c.BootID = protocol.ID()
@@ -124,6 +135,7 @@ type Runtime struct {
 	rootConns      *limiter.Connections
 	packetRate     *limiter.Flows
 	handshakeSlots chan struct{}
+	httpSlots      chan struct{}
 	udpSlots       chan struct{}
 	http           *http.Client
 	initErr        error
@@ -142,11 +154,15 @@ func New(c Config) *Runtime {
 	c.defaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	h, e := protocol.HTTPClient(c.CAFile)
+	if e == nil {
+		e = c.validateListeners()
+	}
 	r := &Runtime{cfg: c, ctx: ctx, cancel: cancel, http: h, initErr: e, rules: map[string]*ruleRuntime{}, devices: map[string]model.DeviceGrant{}, carriers: map[string]carrierState{}, listeners: map[string]listenerState{}, flows: map[string]*flowState{}, budgets: map[string]*accountBudget{}, history: map[string]*accountBudget{}, statuses: map[string]model.RuleStatus{}, listenerErrors: map[string]string{}, certificates: map[string]*tls.Certificate{}, rootConns: limiter.NewConnections(c.MaxConnections), packetRate: limiter.NewFlows(c.MaxPacketsPerSecond), handshakeSlots: make(chan struct{}, c.MaxPendingHandshakes)}
 	if c.WireShaping != nil && r.initErr == nil {
 		r.shaper, r.initErr = shaping.New(*c.WireShaping)
 	}
 	r.scheduler = newCapacityScheduler()
+	r.httpSlots = make(chan struct{}, c.MaxConnections)
 	r.udpSlots = make(chan struct{}, c.MaxUDPSessions)
 	r.wg.Add(2)
 	go r.watch()
@@ -279,6 +295,12 @@ func (r *Runtime) Sync(ctx context.Context) error {
 	return nil
 }
 func (r *Runtime) apply(s model.EdgeSnapshot) error {
+	if r.initErr != nil {
+		return r.initErr
+	}
+	if err := validateCarrierPorts(s.Edge.Endpoints); err != nil {
+		return err
+	}
 	if !r.capacityAvailable() {
 		return errors.New("wire shaping verification failed")
 	}
@@ -335,6 +357,9 @@ func (r *Runtime) apply(s model.EdgeSnapshot) error {
 			continue
 		}
 		if v.Protocol == "tcp" || v.Protocol == "udp" {
+			if host, _, err := net.SplitHostPort(v.Target); err == nil && strings.ContainsAny(host, ":%[]") {
+				rr.policyError = "address_family_unsupported: TCP/UDP target must be an IPv4 address or hostname"
+			}
 			if v.SourceMode != "socket" && v.SourceMode != "native" {
 				rr.policyError = "unsupported source identity mode"
 			}
@@ -579,7 +604,7 @@ func (r *Runtime) pickCarrierLocked(rule model.Rule) *protocol.Carrier {
 			continue
 		default:
 		}
-		if chosen == nil || c.Active() < chosen.Active() || c.Active() == chosen.Active() && c.Transport == "quic" && chosen.Transport != "quic" {
+		if chosen == nil || preferCarrier(c, chosen) {
 			chosen = c
 		}
 	}
@@ -605,10 +630,9 @@ func (r *Runtime) refreshStatusesLocked() {
 			if rr.rule.Protocol == "https" {
 				port = r.snap.Edge.HTTPSPort
 			}
-			key := "site/" + rr.rule.Protocol + "/" + strconv.Itoa(port)
-			if _, ok := r.listeners[key]; !ok {
+			if listening, err := r.siteListening(rr.rule.Protocol, port); !listening {
 				st.Status = "error"
-				st.Error = "site_listener_unavailable: " + r.listenerErrors[key]
+				st.Error = "site_listener_unavailable: " + err
 				r.statuses[id] = st
 				continue
 			}
@@ -691,10 +715,22 @@ func (r *Runtime) serveCarrier(ctx context.Context, c *protocol.Carrier, endpoin
 		return
 	}
 	key := protocol.ID()
+	c.EstablishedAt = time.Now()
 	r.carriers[key] = carrierState{c, endpoint}
 	r.refreshStatusesLocked()
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); delete(r.carriers, key); r.mu.Unlock() }()
+	authorized := func() bool {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		return !r.closing && time.Now().Before(r.snap.ExpiresAt) && r.deviceValidLocked(c)
+	}
+	if c.ReverseProbeSupported() {
+		probeCtx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); c.ObserveQuality(probeCtx, authorized) }()
+		defer func() { stop(); <-done }()
+	}
 	// Business streams remain edge-initiated. Agent streams can only echo the
 	// negotiated fixed control probe, under renewable device authorization.
 	// A synchronous handler bounds incoming control concurrency to one per
@@ -704,19 +740,46 @@ func (r *Runtime) serveCarrier(ctx context.Context, c *protocol.Carrier, endpoin
 		if e != nil {
 			return
 		}
-		c.HandleProbe(ctx, st, func() bool {
-			r.mu.RLock()
-			defer r.mu.RUnlock()
-			return !r.closing && time.Now().Before(r.snap.ExpiresAt) && r.deviceValidLocked(c)
-		})
+		c.HandleProbe(ctx, st, authorized)
 	}
 }
 func ListenQUIC(cfg Config, addr string) (*quic.Listener, error) {
+	pair, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		return nil, err
+	}
+	return quic.ListenAddr(addr, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}, protocol.QUICConfig())
+}
+
+type boundQUICListener struct {
+	*quic.Listener
+	transport *quic.Transport
+	packet    net.PacketConn
+}
+
+func (l *boundQUICListener) Close() error {
+	err := l.Listener.Close()
+	_ = l.transport.Close()
+	_ = l.packet.Close()
+	return err
+}
+func listenQUICNetwork(cfg Config, network, addr string) (*boundQUICListener, error) {
 	pair, e := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 	if e != nil {
 		return nil, e
 	}
-	return quic.ListenAddr(addr, &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}, protocol.QUICConfig())
+	pc, err := net.ListenPacket(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	t := &quic.Transport{Conn: pc}
+	l, err := t.Listen(&tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}, protocol.QUICConfig())
+	if err != nil {
+		_ = t.Close()
+		_ = pc.Close()
+		return nil, err
+	}
+	return &boundQUICListener{Listener: l, transport: t, packet: pc}, nil
 }
 func (r *Runtime) Run(ctx context.Context) error {
 	defer r.Close()

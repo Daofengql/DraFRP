@@ -42,7 +42,7 @@ func TestShortTTLIndependentRenewalAdmission(t *testing.T) {
 			}
 			token := strings.Repeat("renewal-admission-", 3)
 			var edgeConfig model.Edge
-			browser.api("POST", "/api/v1/edges", map[string]any{"name": "renewal-edge", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": []model.Endpoint{{Transport: transport, Address: address(carrierPort), ServerName: "edge.test"}}, "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": businessPort, "port_max": businessPort, "max_carriers": 8, "capacity_bps": -1}, &edgeConfig, 201)
+			browser.api("POST", "/api/v1/edges", map[string]any{"name": "renewal-edge", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": carrierEndpoints(carrierPort), "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": businessPort, "port_max": businessPort, "max_carriers": 8, "capacity_bps": -1}, &edgeConfig, 201)
 			runtime := edge.New(edge.Config{CloudURL: browser.url, EdgeID: edgeConfig.ID, Token: token, CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1"})
 			defer runtime.Close()
 			stateDir := t.TempDir()

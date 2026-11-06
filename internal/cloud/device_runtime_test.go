@@ -18,6 +18,19 @@ func runtimeReport(at time.Time, edgeID string) *model.DeviceRuntime {
 		Endpoints: []model.DeviceEndpointRuntime{{EdgeID: edgeID, Transport: "quic", Address: "edge.example:8443", ServerName: "edge.example", RecentFailures: 1, LastAttempt: at.Add(-time.Second), RetryAt: at.Add(2 * time.Second), ErrorCode: "path_timeout"}}}
 }
 
+func TestDualStackRemoteObservationsRemainDistinct(t *testing.T) {
+	at := time.Now()
+	r := runtimeReport(at, "edge")
+	r.Endpoints[0].RemoteAddress = "192.0.2.1:8443"
+	other := r.Endpoints[0]
+	other.RemoteAddress = "[2001:db8::1]:8443"
+	r.Endpoints = append(r.Endpoints, other)
+	r.Carriers[0].RemoteAddress = other.RemoteAddress
+	if !validDeviceRuntime(r, at) {
+		t.Fatal("IPv4/IPv6 observations of the same authorized DNS endpoint were conflated")
+	}
+}
+
 func TestDeviceRuntimeValidation(t *testing.T) {
 	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	if !validDeviceRuntime(nil, at) || !validDeviceRuntime(runtimeReport(at, "edge"), at) {
@@ -33,6 +46,9 @@ func TestDeviceRuntimeValidation(t *testing.T) {
 		{"stale_report", func(x *model.DeviceRuntime) { x.ReportedAt = at.Add(-2*time.Minute - time.Nanosecond) }},
 		{"future_report", func(x *model.DeviceRuntime) { x.ReportedAt = at.Add(time.Minute + time.Nanosecond) }},
 		{"invalid_preference", func(x *model.DeviceRuntime) { x.PreferredTransport = "fastest" }},
+		{"oversized_platform", func(x *model.DeviceRuntime) { x.Platform = strings.Repeat("x", 33) }},
+		{"invalid_network_mode", func(x *model.DeviceRuntime) { x.NetworkMode = "wintun" }},
+		{"windows_tun", func(x *model.DeviceRuntime) { x.Platform = "windows"; x.NetworkMode = "tun" }},
 		{"negative_counter", func(x *model.DeviceRuntime) { x.ActiveFlows = -1 }},
 		{"excessive_counter", func(x *model.DeviceRuntime) { x.ActiveCarriers = 100001 }},
 		{"inconsistent_transport_counter", func(x *model.DeviceRuntime) { x.QUICCarriers++ }},
@@ -52,6 +68,9 @@ func TestDeviceRuntimeValidation(t *testing.T) {
 		{"future_attempt", func(x *model.DeviceRuntime) { x.Endpoints[0].LastAttempt = at.Add(time.Minute + time.Second) }},
 		{"excessive_retry", func(x *model.DeviceRuntime) { x.Endpoints[0].RetryAt = at.Add(2*time.Minute + time.Second) }},
 		{"duplicate_endpoint", func(x *model.DeviceRuntime) { x.Endpoints = append(x.Endpoints, x.Endpoints[0]) }},
+		{"remote_port_not_granted", func(x *model.DeviceRuntime) { x.Endpoints[0].RemoteAddress = "[::1]:9999" }},
+		{"remote_unspecified", func(x *model.DeviceRuntime) { x.Carriers[0].RemoteAddress = "[::]:8443" }},
+		{"remote_not_ip", func(x *model.DeviceRuntime) { x.Carriers[0].RemoteAddress = "other.test:8443" }},
 		{"excessive_carriers", func(x *model.DeviceRuntime) {
 			for len(x.Carriers) <= model.MaxDeviceRuntimeEntries {
 				x.Carriers = append(x.Carriers, x.Carriers[0])

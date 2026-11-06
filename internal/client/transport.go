@@ -9,7 +9,6 @@ import (
 	"errors"
 	"github.com/quic-go/quic-go"
 	"net"
-	"sort"
 	"time"
 )
 
@@ -17,6 +16,9 @@ func (a *Agent) DialEdge(ctx context.Context, e model.Edge) (*protocol.Carrier, 
 	return a.dialEdge(ctx, e, a.cfg.Transport)
 }
 func (a *Agent) dialEdge(ctx context.Context, e model.Edge, mode string) (*protocol.Carrier, error) {
+	return a.dialEdgeFiltered(ctx, e, mode, false)
+}
+func (a *Agent) dialEdgeFiltered(ctx context.Context, e model.Edge, mode string, excludeActive bool) (*protocol.Carrier, error) {
 	a.mu.RLock()
 	grant := a.snap.Device
 	allowed := false
@@ -33,26 +35,24 @@ func (a *Agent) dialEdge(ctx context.Context, e model.Edge, mode string) (*proto
 	if !allowed || !valid || !time.Now().Before(grant.ExpiresAt) {
 		return nil, errors.New("edge is not authorized by an active snapshot")
 	}
-	eps := append([]model.Endpoint(nil), e.Endpoints...)
-	sort.SliceStable(eps, func(i, j int) bool { return eps[i].Transport == "quic" && eps[j].Transport != "quic" })
-	candidates := []model.Endpoint{}
-	counts := map[string]int{}
-	var earliestRetry time.Time
-	for _, ep := range eps {
-		if mode == "quic_only" && ep.Transport != "quic" || mode == "tls_only" && ep.Transport != "tls" {
-			continue
-		}
-		if available, retry := a.endpointEligible(pathKey(e, ep, grant), time.Now()); !available {
-			if !retry.IsZero() && (earliestRetry.IsZero() || retry.Before(earliestRetry)) {
-				earliestRetry = retry
+	candidates, earliestRetry, resolveErr := a.dialCandidates(ctx, e, grant, mode)
+	if excludeActive {
+		a.mu.RLock()
+		filtered := candidates[:0]
+		for _, candidate := range candidates {
+			active := false
+			for _, c := range a.carriers {
+				active = active || c.EdgeID == e.ID && c.Transport == candidate.ep.Transport && c.RemoteAddress == candidate.key.RemoteAddress
 			}
-			continue
+			if !active {
+				filtered = append(filtered, candidate)
+			}
 		}
-		if counts[ep.Transport] >= 2 {
-			continue
-		}
-		counts[ep.Transport]++
-		candidates = append(candidates, ep)
+		candidates = filtered
+		a.mu.RUnlock()
+	}
+	if resolveErr != nil && len(candidates) == 0 && earliestRetry.IsZero() {
+		return nil, resolveErr
 	}
 	if len(candidates) == 0 {
 		if !earliestRetry.IsZero() {
@@ -62,16 +62,25 @@ func (a *Agent) dialEdge(ctx context.Context, e model.Edge, mode string) (*proto
 	}
 	raceCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
+	stop := context.AfterFunc(a.ctx, cancel)
+	defer stop()
 	type result struct {
 		c *protocol.Carrier
 		e error
 	}
 	results := make(chan result, len(candidates))
-	for i, ep := range candidates {
-		go func(i int, ep model.Endpoint) {
-			delay := time.Duration(i/2) * 200 * time.Millisecond
-			if mode == "auto" && ep.Transport == "tls" && counts["quic"] > 0 {
-				delay += 250 * time.Millisecond
+	counts := map[string]int{}
+	for _, candidate := range candidates {
+		counts[candidate.ep.Transport]++
+	}
+	indices := map[string]int{}
+	for _, candidate := range candidates {
+		i := indices[candidate.ep.Transport]
+		indices[candidate.ep.Transport]++
+		go func(i int, candidate dialCandidate) {
+			delay := time.Duration(i) * 150 * time.Millisecond
+			if mode == "auto" && candidate.ep.Transport == "tls" && counts["quic"] > 0 {
+				delay += 250*time.Millisecond + time.Duration(counts["quic"]-1)*150*time.Millisecond
 			}
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
@@ -81,16 +90,23 @@ func (a *Agent) dialEdge(ctx context.Context, e model.Edge, mode string) (*proto
 				return
 			case <-timer.C:
 			}
+			select {
+			case a.dialSlots <- struct{}{}:
+				defer func() { <-a.dialSlots }()
+			case <-raceCtx.Done():
+				results <- result{e: raceCtx.Err()}
+				return
+			}
 			started := time.Now()
-			key := pathKey(e, ep, grant)
+			key := candidate.key
 			if !a.beginEndpoint(key, started) {
 				results <- result{e: &endpointCooldownError{RetryAt: time.Now().Add(time.Second)}}
 				return
 			}
-			c, err := a.dialEndpoint(raceCtx, e, ep, grant)
+			c, err := a.dialEndpointAddress(raceCtx, e, candidate.ep, key.RemoteAddress, grant)
 			a.finishEndpoint(key, started, err, ctx.Err() != nil)
 			results <- result{c, err}
-		}(i, ep)
+		}(i, candidate)
 	}
 	var last error
 	for i := 0; i < len(candidates); i++ {
@@ -119,6 +135,9 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 func (a *Agent) dialEndpoint(ctx context.Context, e model.Edge, ep model.Endpoint, d model.DeviceGrant) (*protocol.Carrier, error) {
+	return a.dialEndpointAddress(ctx, e, ep, ep.Address, d)
+}
+func (a *Agent) dialEndpointAddress(ctx context.Context, e model.Edge, ep model.Endpoint, address string, d model.DeviceGrant) (*protocol.Carrier, error) {
 	started := time.Now()
 	tc, err := protocol.TLSClient(a.cfg.CAFile, e.CACert, ep.ServerName)
 	if err != nil {
@@ -136,13 +155,13 @@ func (a *Agent) dialEndpoint(ctx context.Context, e model.Edge, ep model.Endpoin
 	var c *protocol.Carrier
 	switch ep.Transport {
 	case "quic":
-		q, err := quic.DialAddr(dialCtx, ep.Address, tc, protocol.QUICConfig())
+		q, err := quic.DialAddr(dialCtx, address, tc, protocol.QUICConfig())
 		if err != nil {
 			return nil, err
 		}
 		c = protocol.WrapQUIC(q, e.ID)
 	case "tls":
-		conn, err := (&tls.Dialer{NetDialer: &net.Dialer{Timeout: 2 * time.Second}, Config: tc}).DialContext(dialCtx, "tcp", ep.Address)
+		conn, err := (&tls.Dialer{NetDialer: &net.Dialer{Timeout: 2 * time.Second}, Config: tc}).DialContext(dialCtx, "tcp", address)
 		if err != nil {
 			return nil, err
 		}
@@ -168,6 +187,7 @@ func (a *Agent) dialEndpoint(ctx context.Context, e model.Edge, ep model.Endpoin
 		return nil, ctx.Err()
 	}
 	c.Endpoint, c.EstablishedAt, c.HandshakeDuration = ep, time.Now(), time.Since(started)
+	c.RemoteAddress = address
 	return c, nil
 }
 func (a *Agent) ConnectEdge(ctx context.Context, e model.Edge) error {
@@ -230,9 +250,16 @@ func (a *Agent) ConnectEdge(ctx context.Context, e model.Edge) error {
 		}
 		dialMode := mode
 		recoverQUIC := mode == "auto" && usable && !hasQUIC && count < limit
+		recoveryMode := mode
+		if mode == "auto" && hasQUIC {
+			recoveryMode = "quic_only"
+		}
+		recoverFamily := usable && count < limit && a.familyRecovery(ctx, e, recoveryMode)
 		if recoverQUIC {
 			dialMode = "quic_only"
-		} else if usable && (load < int64(count*32) || count >= limit) {
+		} else if recoverFamily {
+			dialMode = recoveryMode
+		} else if usable && !recoverFamily && (load < int64(count*32) || count >= limit) {
 			continue
 		}
 		if count >= limit {
@@ -242,10 +269,10 @@ func (a *Agent) ConnectEdge(ctx context.Context, e model.Edge) error {
 			failures = append(failures, errors.New("edge carrier limit cannot satisfy rule transport policies"))
 			continue
 		}
-		c, err := a.dialEdge(ctx, e, dialMode)
+		c, err := a.dialEdgeFiltered(ctx, e, dialMode, recoverFamily || recoverQUIC)
 		if err != nil {
 			var cooldown *endpointCooldownError
-			if !errors.As(err, &cooldown) && !recoverQUIC {
+			if !errors.As(err, &cooldown) && !recoverQUIC && !recoverFamily {
 				failures = append(failures, err)
 			}
 			continue
@@ -322,7 +349,7 @@ func (a *Agent) TransportStatus() []map[string]any {
 	defer a.mu.RUnlock()
 	out := []map[string]any{}
 	for _, c := range a.carriers {
-		out = append(out, map[string]any{"edge_id": c.EdgeID, "transport": c.Transport, "active_flows": c.Active(), "endpoint": c.Endpoint.Address, "established_at": c.EstablishedAt, "handshake_ms": float64(c.HandshakeDuration) / float64(time.Millisecond), "quality": c.Quality()})
+		out = append(out, map[string]any{"edge_id": c.EdgeID, "transport": c.Transport, "active_flows": c.Active(), "endpoint": c.Endpoint.Address, "remote_address": c.RemoteAddress, "established_at": c.EstablishedAt, "handshake_ms": float64(c.HandshakeDuration) / float64(time.Millisecond), "quality": c.Quality()})
 	}
 	return out
 }

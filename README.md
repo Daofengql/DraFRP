@@ -1,10 +1,32 @@
 # DraFRP
 
+[English](README.en.md) | 简体中文
+
 DraFRP 是包含云控、共享出口节点和客户端的内网映射服务。云控保存账号、客户端、规则、套餐和审计；出口节点接入公网流量；客户端主动建立出站加密承载并访问本地目标。三个角色分别编译为 `drafrp-cloud`、`drafrp-edge`、`drafrp-client`。只有云控依赖 MySQL、可选 Redis 和 Web 控制台。
 
-当前可运行 TCP、UDP 和 HTTP(S) 映射，QUIC 优先、TLS/yamux 回退。已完成真实 MySQL 和三端网络联调；验证范围、尚未完成的设计项在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。七份设计文档仍是目标规格，不代表每项均已交付。
+当前可运行 TCP、UDP 和 HTTP(S) 映射，QUIC 优先、TLS/yamux 回退。已完成真实 MySQL 和三端网络联调；验证范围、尚未完成的设计项见 [实现与验收记录](docs/reference/IMPLEMENTATION.md)。七份设计文档仍是目标规格，不代表每项均已交付。
 
-MySQL 的外键、删除动作、历史账本和升级恢复策略见 [SCHEMA-INTEGRITY.md](SCHEMA-INTEGRITY.md)。
+MySQL 的外键、删除动作、历史账本和升级恢复策略见 [数据库关系与删除策略](docs/reference/SCHEMA-INTEGRITY.md)。
+
+项目处于早期预览阶段。Linux 客户端 TUN 已有隔离环境验收，但公网 NAT、高丢包、大规模并发和长期稳定性仍未验证；性能结果仅适用于报告中注明的基准范围。
+
+文档入口：[中文索引](docs/README.md)、[English index](docs/README.en.md)、[部署指南](docs/guides/DEPLOYMENT.md)、[测试说明](docs/guides/TESTING.md)、[实现状态](docs/reference/IMPLEMENTATION.md)、[API 合约](docs/reference/API-CONTRACT.md)、[Linux TUN](docs/guides/LINUX-TUN.md)、[性能记录](docs/performance/2026-11-06.md)。
+
+## 网络设计边界（2026-11-02）
+
+当前客户端/服务器的功能边界如下，中控职责与存储设计沿用现有机制：
+
+| 功能 | 地址族与来源传递 |
+| --- | --- |
+| TCP/UDP 业务 | 仅 IPv4 访客与 IPv4 目标；普通 socket 直接连接目标，Linux 客户端可选 TUN，使目标 socket 看到服务器实际观察到的访客 IPv4/端口 |
+| HTTP(S) 建站 | 公网入口支持 IPv4/IPv6，按请求反向代理；客户端重建可信来源头，支持 IPv6 访客访问单栈 IPv4 目标，不使用 TUN 保源 |
+| 客户端—服务器承载 | IPv4/IPv6 可自动选择，QUIC/UDP 优先、TLS/TCP 兜底；经 IPv6 承载的 IPv4 业务仍保持原有 IPv4 来源语义 |
+| 服务器接入 | 固定 Linux，普通监听，无服务器 TUN；每节点一个 UDP 与一个 TCP 专用承载端口，通过有界 fanout 和流复用服务多客户端、多规则 |
+| Windows 客户端 | 普通 socket 与 HTTP(S) 来源头，不支持源 IP/端口透传 |
+
+IPv6 TCP/UDP 业务、IPv6 原生保源、通用 VPN、STCP/SUDP/XTCP 与打洞直连不在本轮范围。隧道传输应用载荷和认证来源元数据，客户端 TUN 的 IP 包仅用于本地目标投递；所有模式统一按应用载荷计量。
+
+双栈 HTTP、双栈承载自动选择、独立监听地址族和专用端口布局的实现与验收见 [实现与验收记录](docs/reference/IMPLEMENTATION.md)；详细规格见 [主设计](docs/design/tunnel-service-design-notes.md)、[来源传递](docs/design/transparent-source-design.md) 和 [传输承载](docs/design/transport-protocol-design.md)。
 
 ## 构建
 
@@ -30,6 +52,8 @@ bash scripts/build.sh 0.1.0 linux amd64
 4. 复制 `examples/edge.json`，填写云控 URL、出口节点 ID、token 和承载 TLS 证书路径，运行 `drafrp-edge --config edge.json`。证书必须匹配 endpoint 的 `server_name`；私有 CA 应写入出口节点的 CA 配置，云控私有 CA 则使用 `ca_file`。
 5. 复制 `examples/client.json` 到目标机器。Windows 使用可写的绝对 `state_dir`，如 `C:/ProgramData/DraFRP/device-a`。运行 `drafrp-client --config client.json`，打开日志给出的绑定地址，核对客户端指纹后确认。每个独立进程使用独立状态目录；复制同一身份同时运行会发生会话冲突。
 6. 在控制台创建映射，选择绑定客户端和出口节点。TCP/UDP 目标为 `host:port`，HTTP(S) 目标为 `http://host:port/base` 或 `https://host:port/base`。客户端的本地目标允许列表限制云端规则能访问的地址和端口；示例仅允许 loopback。`allowed_target_cidrs`/`allowed_target_ports` 缺省为不额外限制，显式空数组拒绝所有目标。
+
+出口本地 `listen_host` 仅控制 IPv4 TCP/UDP 业务监听；`carrier_listen_hosts` 与 `http_listen_hosts` 可分别指定 IPv4/IPv6 IP 数组。默认业务地址为 0.0.0.0，承载与网站同时尝试 0.0.0.0 和 ::；显式配置单个 loopback 时沿用该地址。绑定失败按地址报告，某一地址族可用不表示另一地址族已开放。服务器域名的 A/AAAA 指向这些实际监听地址，客户端解析后进行有界竞速；TLS server_name 始终校验配置身份。已有节点升级前将 endpoints 整理为恰好一个 quic 和一个 tls，不需要数据库迁移。
 
 配置是严格 JSON：未知字段报错，时长接受 `"20s"` 等 Go duration 字符串，也兼容数值纳秒。正常同步间隔默认 20 秒、授权期限默认 3 分钟；断开云控超过期限后现有转发停止。客户端进程重启后，新会话须等旧租约到期后才可接管身份，或重新绑定独立客户端。
 
@@ -73,15 +97,17 @@ ACL 页可模拟未保存草稿和已发布模板；TCP/UDP 规则详情可模�
 
 ### Linux 原生源 IP 和端口
 
-普通 socket 模式下目标看到客户端的地址。严格 `native` 规则当前支持 Linux IPv4 TCP/UDP 透明 socket：目标真实 socket 对端为出口节点观察到的访客 IP 和端口，不注入业务前缀。它与设计中的原始 IP 包/TUN 路径不同；`tun`、Windows native 和 IPv6 native 尚不支持。
+普通 socket 模式下目标看到客户端的地址。严格 `native` 规则支持 Linux IPv4 TCP/UDP 的透明 socket 与客户端 TUN 路径，目标真实 socket 对端为出口节点观察到的访客 IP 和端口，不注入业务前缀。Windows native/TUN 和 IPv6 native 暂不支持。
 
 在专用 Linux 网络命名空间或经过规划的主机上，给客户端配置 `network_mode: "transparent"`、私有且持久的 `state_dir`、`native_flow_limit`（默认 128，上限 1024）。需要 `ip`、`iptables` 和 CAP_NET_ADMIN。启动时分别实际验证 TCP/UDP 透明回流，再上报对应能力；控制台只允许匹配能力的规则。普通 socket 规则仍可使用。
 
 本机目标会安装精确五元组的回流标记和策略路由。远程 LAN 目标还需管理员事先确保**回复访客地址的路由经过客户端**，并在 `native_return_cidrs` 声明允许的目标网段；这个字段不代替目标端路由配置。源元组冲突、权限不足或回流不可用时明确失败，不自动改端口。已有 NAT 后的不可见原始地址无法恢复。客户端仅维护带私有所有权标记的网络对象，正常退出清理，崩溃后依赖同一状态目录恢复。
 
+TUN 仅在 Linux 客户端启用 `network_mode: "tun"`，由本地 TCP/IP 协议栈与 TUN 完成目标侧保源和回流。出口固定支持 Linux，使用普通监听，无 TUN 配置或保源网络权限。公网与目标 TCP 分别握手，但目标仍看到访客 IP/端口；隧道和计量均为业务载荷。配置、优化和支持边界见 [Linux TUN 指南](docs/guides/LINUX-TUN.md)，客户端示例为 `examples/client-tun.json`。Windows 只支持普通转发，不支持源 IP/端口透传。
+
 ### 出口节点物理出口整形
 
-账户限额始终按业务 payload 计量。默认 `capacity_enforcement=payload` 不能当作网卡硬上限。Linux 可另外配置 `wire_shaping`，见 `examples/edge-wire.json`：必须明确指定专用非 loopback 接口、`dedicated_interface: true`、私有持久状态目录和独立 `rate_bps`。需要 `tc`（iproute2）和 CAP_NET_ADMIN。
+账户限额在所有网络模式下统一按应用载荷字节计量。默认 `capacity_enforcement=payload` 不能当作网卡硬上限。Linux 可另外配置 `wire_shaping`，见 `examples/edge-wire.json`：必须明确指定专用非 loopback 接口、`dedicated_interface: true`、私有持久状态目录和独立 `rate_bps`。需要 `tc`（iproute2）和 CAP_NET_ADMIN。
 
 该模式用 TBF 约束指定接口的**全部出站流量**，包括隧道封装；不限制入站，不代表以太网 L1 精确线速。不要选择承载其他项目的共享接口。已有未知 root qdisc 时拒绝覆盖。运行中独立检查 qdisc；被删除或篡改后关闭数据面并报告 wire_failed。云控 CapacityBPS 与本地 wire rate 分别配置，控制台同时显示实施模式和真实网卡累计 TX/RX（包含该接口其他流量，不归属于某个租户）。
 
@@ -96,14 +122,16 @@ ACL 页可模拟未保存草稿和已发布模板；TCP/UDP 规则详情可模�
 `Dockerfile` 提供非特权的 `cloud`、`edge`、`client` target；另有带所需网络工具的 `edge-wire`、`client-native` target，需在专用网络命名空间显式授予 NET_ADMIN。`examples/compose.yaml` 可启动专用 MySQL 和只绑定宿主 loopback 的云控：
 
 ```bash
-export DRAFRP_DB_PASSWORD='replace-with-random-db-password'
-export DRAFRP_DB_ROOT_PASSWORD='replace-with-separate-root-password'
+export DRAFRP_DB_PASSWORD="$(openssl rand -hex 24)"
+export DRAFRP_DB_ROOT_PASSWORD="$(openssl rand -hex 24)"
 export DRAFRP_STORAGE_KEY="$(openssl rand -base64 32)"
-export DRAFRP_ADMIN_PASSWORD='replace-with-random-admin-password'
+export DRAFRP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 docker compose -f examples/compose.yaml up -d --build
 ```
 
 保存上述存储密钥以供重启恢复。Redis 为可选临时缓存，可在 cloud 配置的 `redis.address` 指定。不可用时自动切换有容量上限的进程内缓存；恢复后经过连续探测切回。身份、会话、套餐和绑定结果以 MySQL 为准，不依赖 Redis 成功。
+
+HTTPS 反向代理与 edge/client 容器样例见 [部署指南](docs/guides/DEPLOYMENT.md) 和 `examples/compose.*.yaml`。Docker 镜像与二进制包会附带 GPL 和第三方许可证文本。
 
 Linux systemd 示例位于 `examples/systemd`。先创建 `drafrp` 系统用户/组，将二进制安装到 `/usr/local/bin`、配置与证书安装到 `/etc/drafrp`，配置和私钥由 root 持有并仅允许 drafrp 组读取（0640）。客户端的 `StateDirectory` 由 systemd 创建。示例客户端 unit 面向普通 socket 模式。
 
@@ -129,6 +157,10 @@ DRAFRP_TEST_MYSQL_DSN='root:test-password@tcp(127.0.0.1:3306)/' \
 
 `internal/systemtest` 通过真实 HTTP API 绑定客户端、创建规则，运行真实出口节点和客户端，分别验证 QUIC/TLS 上的 TCP、UDP、HTTPS、可信来源头、落库用量/状态和撤销活跃流。前端 fixture/browser QA 单独记录在 `web/README.md`，不作为真实数据库端到端证据。
 
-`scripts/smoke.py` 还可对三个正式可执行文件进行 API 联调。提供独立空数据库和尚不存在的 `--work-dir`，需要 Python 3、openssl：`DRAFRP_SMOKE_MYSQL_DSN='…/dedicated_empty_db' python3 scripts/smoke.py --bin-dir bin/0.1.0/linux-amd64 --work-dir /private/new-run`。目录中配置含测试凭据，应按私密状态保存；result.json 不含凭据。它不会改宿主路由或防火墙。原生模式与整形的特权验证只在明确指定的隔离容器运行，见 IMPLEMENTATION.md。
+`smoke.py` 的三二进制联调和 VM 性能测试说明（包括安全输入 DSN、隔离数据库与私密工作目录）见 [测试说明](docs/guides/TESTING.md)。原生模式与流量整形的特权验证只在明确指定的隔离容器运行，见[实现与验收记录](docs/reference/IMPLEMENTATION.md)。
 
-更多接口与兼容约定见 [API-CONTRACT.md](API-CONTRACT.md)。
+更多接口与兼容约定见 [API 合约](docs/reference/API-CONTRACT.md)。
+
+## 贡献、安全与许可
+
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，漏洞报告方式见 [SECURITY.md](SECURITY.md)。DraFRP 以 GPL-3.0-only 发布；第三方组件的许可证与清单见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

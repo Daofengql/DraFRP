@@ -3,6 +3,7 @@ package edge
 import (
 	"drafrp/internal/model"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -27,14 +28,38 @@ func (r *Runtime) runtimeLocked() *model.EdgeRuntime {
 		out.GeoIPVersion = r.geoDB.Version
 	}
 	for _, ep := range r.snap.Edge.Endpoints {
-		key := "carrier/" + ep.Transport + "/" + ep.Address
-		listener, exists := r.listeners[key]
-		out.Endpoints = append(out.Endpoints, model.EndpointRuntime{
-			Transport: ep.Transport,
-			Address:   ep.Address,
-			Listening: exists && listener.closer != nil && listener.kind == "carrier" && !r.closing,
-			Error:     r.listenerErrors[key],
-		})
+		observed := model.EndpointRuntime{Transport: ep.Transport, Address: ep.Address}
+		var failures []string
+		for _, b := range r.carrierBindings(ep) {
+			listener, exists := r.listeners[b.key]
+			live := exists && listener.closer != nil && listener.kind == "carrier" && !r.closing
+			observed.Listening = observed.Listening || live
+			observed.Bindings = append(observed.Bindings, model.ListenerRuntime{Network: b.network, Address: b.address, Listening: live, Error: r.listenerErrors[b.key]})
+			if e := r.listenerErrors[b.key]; e != "" {
+				failures = append(failures, e)
+			}
+		}
+		observed.Error = strings.Join(failures, "; ")
+		out.Endpoints = append(out.Endpoints, observed)
+	}
+	for _, site := range []struct {
+		kind string
+		port int
+	}{{"http", r.snap.Edge.HTTPPort}, {"https", r.snap.Edge.HTTPSPort}} {
+		if site.port == 0 {
+			continue
+		}
+		observed := model.EndpointRuntime{Transport: site.kind}
+		for _, b := range r.siteBindings(site.kind, site.port) {
+			live := r.listeners[b.key].closer != nil && !r.closing
+			observed.Listening = observed.Listening || live
+			observed.Bindings = append(observed.Bindings, model.ListenerRuntime{Network: b.network, Address: b.address, Listening: live, Error: r.listenerErrors[b.key]})
+		}
+		if len(observed.Bindings) > 0 {
+			observed.Address = observed.Bindings[0].Address
+		}
+		_, observed.Error = r.siteListening(site.kind, site.port)
+		out.Sites = append(out.Sites, observed)
 	}
 	for _, state := range r.carriers {
 		if state.c == nil {

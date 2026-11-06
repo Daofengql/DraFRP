@@ -145,8 +145,9 @@ func certFiles(t *testing.T) (string, string, string) {
 }
 
 func TestFullSystem(t *testing.T) {
-	for _, transport := range []string{"quic", "tls"} {
-		t.Run(transport, func(t *testing.T) {
+	for _, path := range []struct{ transport, host string }{{"quic", "127.0.0.1"}, {"tls", "127.0.0.1"}, {"quic", "::1"}, {"tls", "::1"}} {
+		transport := path.transport
+		t.Run(transport+"/"+path.host, func(t *testing.T) {
 			// This feature test advances synchronization explicitly. Keep leases
 			// live across control API round trips under full race-test load;
 			// the independent-renewal test exercises the short ten-second TTL.
@@ -155,9 +156,13 @@ func TestFullSystem(t *testing.T) {
 			defer cancel()
 			certFile, keyFile, cert := certFiles(t)
 			carrierPort, httpPort, httpsPort, businessPort, secondPort := freePort(t), freePort(t), freePort(t), freePort(t), freePort(t)
+			endpoints := carrierEndpoints(carrierPort)
+			for i := range endpoints {
+				endpoints[i].Address = net.JoinHostPort(path.host, fmt.Sprint(carrierPort))
+			}
 			var e model.Edge
-			b.api("POST", "/api/v1/edges", map[string]any{"name": "system-edge", "token": strings.Repeat("system-test-token-", 3), "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": []model.Endpoint{{Transport: transport, Address: address(carrierPort), ServerName: "edge.test"}}, "ca_cert": cert, "http_port": httpPort, "https_port": httpsPort, "port_min": min(businessPort, secondPort), "port_max": max(businessPort, secondPort), "max_carriers": 8, "capacity_bps": -1}, &e, 201)
-			r := edge.New(edge.Config{CloudURL: b.url, EdgeID: e.ID, Token: strings.Repeat("system-test-token-", 3), CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1", UDPIdleTimeout: 300 * time.Millisecond})
+			b.api("POST", "/api/v1/edges", map[string]any{"name": "system-edge", "token": strings.Repeat("system-test-token-", 3), "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": endpoints, "ca_cert": cert, "http_port": httpPort, "https_port": httpsPort, "port_min": min(businessPort, secondPort), "port_max": max(businessPort, secondPort), "max_carriers": 8, "capacity_bps": -1}, &e, 201)
+			r := edge.New(edge.Config{CloudURL: b.url, EdgeID: e.ID, Token: strings.Repeat("system-test-token-", 3), CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1", CarrierListenHosts: []string{"127.0.0.1", "::1"}, HTTPListenHosts: []string{"127.0.0.1", "::1"}, UDPIdleTimeout: 300 * time.Millisecond})
 			defer r.Close()
 			a, err := client.New(client.Config{CloudURL: b.url, StateDir: t.TempDir(), Transport: transport + "_only"})
 			if err != nil {
@@ -301,7 +306,7 @@ func TestFullSystem(t *testing.T) {
 			roots.AppendCertsFromPEM([]byte(cert))
 			web := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "app.test"}}, Timeout: 5 * time.Second}
 			defer web.CloseIdleConnections()
-			req, _ := http.NewRequest("POST", "https://"+address(httpsPort)+"/escaped%2Fpath?q=a%26b", bytes.NewReader(payload))
+			req, _ := http.NewRequest("POST", "https://"+net.JoinHostPort(path.host, fmt.Sprint(httpsPort))+"/escaped%2Fpath?q=a%26b", bytes.NewReader(payload))
 			req.Host = "app.test"
 			req.Header.Set("X-Forwarded-For", "forged")
 			res, err := web.Do(req)
@@ -310,7 +315,7 @@ func TestFullSystem(t *testing.T) {
 			}
 			got, err = io.ReadAll(res.Body)
 			_ = res.Body.Close()
-			if err != nil || res.StatusCode != 200 || !bytes.Equal(got, payload) || res.Header.Get("X-Origin-XFF") != "127.0.0.1" || res.Header.Get("X-Origin-Host") != "origin.internal" || res.Header.Get("X-Origin-Proto") != "https" {
+			if err != nil || res.StatusCode != 200 || !bytes.Equal(got, payload) || res.Header.Get("X-Origin-XFF") != path.host || res.Header.Get("X-Origin-Host") != "origin.internal" || res.Header.Get("X-Origin-Proto") != "https" {
 				t.Fatalf("site HTTP %d bytes=%d headers=%v err=%v", res.StatusCode, len(got), res.Header, err)
 			}
 			if err = r.Sync(ctx); err != nil {

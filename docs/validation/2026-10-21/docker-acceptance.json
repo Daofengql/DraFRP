@@ -1,7 +1,7 @@
 {
   "status": "passed",
   "scope": "dedicated Hyper-V Ubuntu VM only",
-  "source": "<redacted test workspace>/validation-20261021/source",
+  "source": "<redacted test workspace>",
   "expected_build_id": "0.1.0-preview+3d76fc7",
   "started_at": "2026-10-20T17:54:33Z",
   "source_digest_before": {
@@ -128,7 +128,7 @@
   },
   "completed_at": "2026-10-20T17:55:47Z",
   "source_archive": {
-    "path": "<redacted test workspace>/validation-20261021/source.tgz",
+    "path": "<redacted test workspace>/source.tgz",
     "sha256": "ac603ec8d1c49af9cba543862bbb14fc057f8fda57740de6ee2754df80007565",
     "files": 159
   },

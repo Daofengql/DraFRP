@@ -1,0 +1,14 @@
+{
+  "cloud_url": "https://control.example.com",
+  "state_dir": "/var/lib/drafrp-client-tun",
+  "name": "linux-tun-device",
+  "sync_interval": "20s",
+  "transport": "auto",
+  "network_mode": "tun",
+  "allowed_target_cidrs": ["127.0.0.0/8"],
+  "max_carriers_per_edge": 2,
+  "tun": {
+    "max_flows": 128,
+    "return_cidrs": []
+  }
+}

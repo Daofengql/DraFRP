@@ -172,6 +172,10 @@ function RuleForm({
     form.protocol,
     selectedDevice?.capabilities,
   );
+  const nativeUnavailableReason =
+    selectedDevice?.runtime?.platform === "windows"
+      ? "Windows 不支持源 IP/端口透传，请使用普通转发。"
+      : "客户端未上报当前协议的原生保源能力。";
   const set = <K extends keyof typeof form>(
     key: K,
     value: (typeof form)[K],
@@ -190,7 +194,7 @@ function RuleForm({
       return;
     }
     if (form.enabled && form.source_mode === "native" && !nativeAvailable) {
-      setValidation("客户端未上报当前协议的原生保源能力");
+      setValidation(nativeUnavailableReason);
       return;
     }
     if (sites) {
@@ -219,11 +223,13 @@ function RuleForm({
         return;
       }
     } else if (
-      !/^(\[[0-9a-fA-F:]+\]|[^\s:]+):\d+$/.test(form.target) ||
+      !/^[^\s:%\[\]]+:\d+$/.test(form.target) ||
       Number(form.target.split(":").at(-1)) < 1 ||
       Number(form.target.split(":").at(-1)) > 65535
     ) {
-      setValidation("目标格式应为 host:port；IPv6 地址使用 [address]:port。");
+      setValidation(
+        "TCP/UDP 目标应为 IPv4 地址或域名加端口；域名仅使用 IPv4 解析结果。",
+      );
       return;
     }
     const data = {
@@ -502,7 +508,7 @@ function RuleForm({
                     onChange={(e) => set("target", e.target.value)}
                     required
                     fullWidth
-                    helperText="客户端可达的地址；IPv6 格式为 [address]:port"
+                    helperText="客户端可达的 IPv4 地址或域名；仅转发 IPv4 TCP/UDP，承载链路可使用 IPv6"
                   />
                 </Stack>
                 <Collapse in={advanced} unmountOnExit>
@@ -516,14 +522,18 @@ function RuleForm({
                       <MenuItem value="socket">普通转发</MenuItem>
                       <MenuItem value="native" disabled={!nativeAvailable}>
                         原生保源（Linux IPv4）
-                        {nativeAvailable ? "" : " · 能力未上报"}
+                        {nativeAvailable
+                          ? ""
+                          : selectedDevice?.runtime?.platform === "windows"
+                            ? " · Windows 不支持"
+                            : " · 能力未上报"}
                       </MenuItem>
                     </TextField>
                     {form.source_mode === "native" && (
                       <Alert severity={nativeAvailable ? "warning" : "error"}>
                         {nativeAvailable
                           ? "保留来源 IP 和端口，需配置目标网络回程与策略路由。"
-                          : "客户端未上报当前协议的原生保源能力。"}
+                          : nativeUnavailableReason}
                       </Alert>
                     )}
                     <TextField
@@ -1141,7 +1151,9 @@ export function RulePage() {
               >
                 {nativeSourceCapability(r.protocol, d?.capabilities)
                   ? "原生保源：保留来源 IP 和端口，需配置目标网络回程与策略路由。"
-                  : "客户端未上报原生保源能力，规则停止转发。"}
+                  : d?.runtime?.platform === "windows"
+                    ? "Windows 不支持源 IP/端口透传，请使用普通转发。"
+                    : "客户端未上报原生保源能力，规则停止转发。"}
               </Alert>
             )}
             {site ? (

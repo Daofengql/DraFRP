@@ -149,7 +149,7 @@ export default function EdgeDetails({
                   。地区匹配规则停止转发。
                 </Alert>
               )}
-              <Typography variant="h6">客户端 承载端点</Typography>
+              <Typography variant="h6">承载与网站监听</Typography>
               {!runtime.endpoints?.length ? (
                 <Empty title="暂无端点数据" />
               ) : (
@@ -163,23 +163,39 @@ export default function EdgeDetails({
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {runtime.endpoints.map((ep) => (
-                      <TableRow key={`${ep.transport}/${ep.address}`}>
-                        <TableCell>{ep.transport.toUpperCase()}</TableCell>
-                        <TableCell className="mono">{ep.address}</TableCell>
-                        <TableCell>
-                          <Status
-                            value={ep.listening ? "listening" : "not_listening"}
-                          />
-                          {!fresh && (
-                            <Typography variant="caption" display="block">
-                              观测已过期
-                            </Typography>
-                          )}
-                        </TableCell>
-                        <TableCell>{ep.error || "无上报错误"}</TableCell>
-                      </TableRow>
-                    ))}
+                    {[...runtime.endpoints, ...(runtime.sites || [])].map(
+                      (ep) => (
+                        <TableRow key={`${ep.transport}/${ep.address}`}>
+                          <TableCell>{ep.transport.toUpperCase()}</TableCell>
+                          <TableCell className="mono">{ep.address}</TableCell>
+                          <TableCell>
+                            <Status
+                              value={
+                                ep.listening ? "listening" : "not_listening"
+                              }
+                            />
+                            {ep.bindings?.map((binding) => (
+                              <Typography
+                                key={`${binding.network}/${binding.address}`}
+                                variant="caption"
+                                display="block"
+                              >
+                                {binding.network.toUpperCase()} ·{" "}
+                                {binding.address} ·{" "}
+                                {binding.listening ? "监听中" : "未监听"}
+                                {binding.error ? `：${binding.error}` : ""}
+                              </Typography>
+                            ))}
+                            {!fresh && (
+                              <Typography variant="caption" display="block">
+                                观测已过期
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>{ep.error || "无上报错误"}</TableCell>
+                        </TableRow>
+                      ),
+                    )}
                   </TableBody>
                 </TableFrame>
               )}

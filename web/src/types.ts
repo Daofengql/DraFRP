@@ -53,6 +53,8 @@ export interface Device {
   runtime?: DeviceRuntime;
 }
 export interface DeviceRuntime {
+  platform?: string;
+  network_mode?: string;
   reported_at: string;
   received_at: string;
   snapshot_expires_at: string;
@@ -69,6 +71,7 @@ export interface DeviceRuntime {
     transport: string;
     address: string;
     server_name: string;
+    remote_address?: string;
     active_flows: number;
     established_at: string;
     handshake_ms: number;
@@ -79,6 +82,7 @@ export interface DeviceRuntime {
     transport: string;
     address: string;
     server_name: string;
+    remote_address?: string;
     recent_failures: number;
     retry_at?: string;
     last_attempt?: string;
@@ -143,6 +147,7 @@ export interface Edge {
   runtime?: EdgeRuntime;
 }
 export interface EdgeRuntime {
+  sites?: EdgeRuntime["endpoints"];
   reported_at: string;
   snapshot_expires_at: string;
   endpoints: Array<{
@@ -150,6 +155,12 @@ export interface EdgeRuntime {
     address: string;
     listening: boolean;
     error?: string;
+    bindings?: Array<{
+      network: string;
+      address: string;
+      listening: boolean;
+      error?: string;
+    }>;
   }>;
   active_flows: number;
   active_carriers: number;

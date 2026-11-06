@@ -2,6 +2,8 @@
 
 React 19、TypeScript 严格模式、MUI、TanStack Query、React Router、React Hook Form / Zod。路由固定为 `/console/`，API 为同源 `/api/v1/`，登录接口为 `/auth/`。页面使用本地系统字体与随包图标，不依赖外部 CDN。
 
+2026-11-01 网络展示目标更新为：TCP/UDP 业务仅 IPv4，Linux 客户端可选 TUN 保源；HTTP(S) 入口双栈、逐请求来源头与普通回源连接池；客户端—服务器的承载地址族与 QUIC/TLS 分别展示，每服务器一对 UDP/TCP 专用接入端口。IPv6 HTTP 或 IPv6 承载不能显示为 IPv6 四层转发能力。表单已限制两个专用入口及 IPv4 四层目标，传输页显示实际 IP，出口页显示逐地址族绑定，验收范围见 [实现与验收记录](../docs/reference/IMPLEMENTATION.md)，展示设计见 [前端与二进制嵌入设计](../docs/design/frontend-and-embed-design.md)。
+
 ## 本地开发
 
 使用 Node.js 22.12 或更新版本（当前验证环境为 Node.js 24）。在 `web/` 执行：
@@ -52,9 +54,9 @@ node tests/console-fixture.mjs
 
 “流量统计”位于用户侧 `/console/usage`，仅展示当前空间；“全平台流量”位于管理员侧 `/console/admin/usage`，后端检查管理员权限。顶部默认“全部出口节点”，图表只显示上传与下载合计的一条曲线；选择一个节点后只显示该节点，带宽和流量切换沿用同一筛选。支持 1 分钟至 1 天粒度、最近 30 天和自定义时间，每次最多 1440 点。缺失报告断线，真实零值仍显示 0；悬停吸附时间点，点击、触摸或方向键固定详情，Esc 或“取消固定”恢复跟随，自动刷新按时间保留选中的点。
 
-分钟历史、控制台分离、节点筛选和详情固定的验证记录见 `docs/validation/2026-10-20/traffic-history.json`。浏览器曲线为真实隔离 MySQL 内的人工 API 采样，真实业务载荷核对由 QUIC/TLS 全栈测试提供；两类证据分别记录。
+分钟历史、控制台分离、节点筛选和详情固定经隔离测试验证。浏览器曲线使用隔离 MySQL 内的人工 API 采样，真实业务载荷核对由 QUIC/TLS 全栈测试提供；两类验证各自独立，不能混为一谈。
 
-带宽为业务载荷的区间平均 bit/s，最高值是最高区间平均值；物理接口累计计数仍单独展示。旧节点或缓存溢出的数据以收到报告时间汇总并提示，已有累计用量不能重建升级前的分钟曲线。控制台只展示服务端已有观测。配置保存与监听应用不等于目标健康；没有客户端承载速率或目标探测时明确显示未上报。native 入口仅在设备上报对应 `native_tcp_ipv4_ip_port` / `native_udp_ipv4_ip_port` 时可选，语义为 Linux IPv4 透明 socket 严格保留 IP 与端口；TUN 和 IPv6 保源不作为已实现能力展示。
+带宽为业务计量字节的区间平均 bit/s，最高值是最高区间平均值；所有网络模式按应用载荷计量，物理接口累计计数仍单独展示。旧节点或缓存溢出的数据以收到报告时间汇总并提示，已有累计用量不能重建升级前的分钟曲线。控制台只展示服务端已有观测。配置保存与监听应用不等于目标健康；没有客户端承载速率或目标探测时明确显示未上报。native 入口仅在设备上报对应 `native_tcp_ipv4_ip_port` / `native_udp_ipv4_ip_port` 时可选，语义为 Linux IPv4 严格保留 IP 与端口。客户端 `network_mode` 可选透明 socket 或 TUN；TUN 仅属于 Linux 客户端，另报告 `tun_client_*` 能力；Linux 出口使用普通监听，见 [Linux TUN 指南](../docs/guides/LINUX-TUN.md)。Windows 设备详情和规则编辑明确显示不支持源 IP/端口透传；普通转发可用。IPv6 保源暂不支持。
 
 管理员可在边缘列表打开运行观测，查看边缘实际采样的监听状态与错误、QUIC/TLS 承载数、活动业务流、UDP 映射及快照授权期限，以及 GeoIP 数据库状态、版本和加载错误。陈旧观测明确标注，节点统计包含全部空间；容量执行口径按后端实际报告区分 payload、wire 与 wire_failed，未知字段不会当作已实现。可选 Linux wire 整形为接口发出方向，物理 RX/TX 是包含控制、封装和重传的接口累计计数，与账号业务计量分别展示。
 

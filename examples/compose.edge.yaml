@@ -1,0 +1,18 @@
+services:
+  edge:
+    profiles: ["edge"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: edge
+    image: drafrp-edge:local
+    network_mode: host
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${DRAFRP_EDGE_CONFIG:?set the host path to edge.json}:/etc/drafrp/edge.json:ro
+      - ${DRAFRP_EDGE_CERT:?set the host path to carrier.crt}:/etc/drafrp/carrier.crt:ro
+      - ${DRAFRP_EDGE_KEY:?set the host path to carrier.key}:/etc/drafrp/carrier.key:ro
+    command: ["--config", "/etc/drafrp/edge.json"]
+    restart: unless-stopped

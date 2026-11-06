@@ -143,6 +143,33 @@ func TestMySQLPlanTrafficAndBurstPolicies(t *testing.T) {
 	}
 }
 
+func TestMySQLUnmeteredGrantWaitsForCreditRenewal(t *testing.T) {
+	f := newCloudFixture(t)
+	b := f.createUser("unmetered-credit")
+	d, key := f.bind(b, "unmetered-device")
+	e := f.edge("unmetered-credit")
+	f.createRule(b, d, e, 20000)
+	f.syncClient(d, key, "unmetered-credit-session")
+
+	first := decodeResponse[model.EdgeSnapshot](t, f.syncEdge(e, "unmetered-credit-boot", nil, nil), 200)
+	if len(first.Grants) != 1 {
+		t.Fatalf("initial snapshot has %d grants, want 1", len(first.Grants))
+	}
+	g := first.Grants[0]
+	if !g.WaitForCredit || g.Bytes <= 16<<20 || g.BaseBPS == 0 || g.PeakBPS == 0 {
+		t.Fatalf("unmetered grant cannot wait for renewal at its ordinary rate: %+v", g)
+	}
+
+	usage := model.Usage{GrantID: g.ID, Sequence: 1, UploadBytes: g.Bytes - 8<<20}
+	renewed := decodeResponse[model.EdgeSnapshot](t, f.syncEdge(e, "unmetered-credit-boot", nil, []model.Usage{usage}), 200)
+	if len(renewed.Grants) != 1 {
+		t.Fatalf("renewed snapshot has %d grants, want 1", len(renewed.Grants))
+	}
+	if next := renewed.Grants[0]; next.ID != g.ID || !next.WaitForCredit || next.Bytes <= g.Bytes {
+		t.Fatalf("low unmetered credit was not renewed in place: before=%+v after=%+v", g, next)
+	}
+}
+
 func TestMySQLPlansDefaultsAssignmentAndAccess(t *testing.T) {
 	f := newCloudFixture(t)
 	a, z := f.edge("package-a"), f.edge("package-z")

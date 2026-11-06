@@ -67,9 +67,10 @@ func (r *Runtime) acceptUDP(ruleID string, pc net.PacketConn) {
 			continue
 		}
 		source, se := netip.ParseAddrPort(peer.String())
-		if se != nil {
+		if se != nil || !source.Addr().Unmap().Is4() {
 			continue
 		}
+		source = netip.AddrPortFrom(source.Addr().Unmap(), source.Port())
 		r.mu.RLock()
 		rr := r.rules[ruleID]
 		allowed := rr != nil && rr.policyError == "" && time.Now().Before(r.snap.ExpiresAt) && r.allowObservedACL(rr, source)

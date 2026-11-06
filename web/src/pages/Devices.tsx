@@ -433,14 +433,20 @@ export function DevicePage() {
             </Paper>
             <DeviceTransport device={d} />
             <Typography variant="body2" color="text.secondary">
-              原生保源（Linux IPv4）：TCP{" "}
-              {nativeSourceCapability("tcp", d.capabilities)
-                ? "支持"
-                : "未上报"}
-              ；UDP{" "}
-              {nativeSourceCapability("udp", d.capabilities)
-                ? "支持"
-                : "未上报"}
+              {d.runtime?.platform === "windows" ? (
+                "Windows：支持普通转发，不支持源 IP/端口透传。"
+              ) : (
+                <>
+                  原生保源（Linux IPv4）：TCP{" "}
+                  {nativeSourceCapability("tcp", d.capabilities)
+                    ? "支持"
+                    : "未上报"}
+                  ；UDP{" "}
+                  {nativeSourceCapability("udp", d.capabilities)
+                    ? "支持"
+                    : "未上报"}
+                </>
+              )}
             </Typography>
             <Typography variant="h6">该客户端的规则</Typography>
             <Load loading={rules.isLoading} error={rules.error}>

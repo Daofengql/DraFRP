@@ -10,8 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
+	"net/netip"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -102,9 +106,22 @@ func (s *Server) edgeSyncInTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 	var runtimeJSON any
 	if in.Runtime != nil {
-		if len(in.Runtime.Endpoints) > 16 || in.Runtime.ActiveFlows < 0 || in.Runtime.ActiveCarriers < 0 || in.Runtime.QUICCarriers < 0 || in.Runtime.TLSCarriers < 0 || in.Runtime.UDPMappings < 0 {
+		if len(in.Runtime.Endpoints) > 16 || len(in.Runtime.Sites) > 2 || in.Runtime.ActiveFlows < 0 || in.Runtime.ActiveCarriers < 0 || in.Runtime.QUICCarriers < 0 || in.Runtime.TLSCarriers < 0 || in.Runtime.UDPMappings < 0 {
 			apiErr(w, 400, "invalid_runtime", "invalid edge runtime counters")
 			return
+		}
+		for _, ep := range append(append([]model.EndpointRuntime(nil), in.Runtime.Endpoints...), in.Runtime.Sites...) {
+			if len(ep.Bindings) > 8 {
+				apiErr(w, 400, "invalid_runtime", "too many listener bindings")
+				return
+			}
+			for _, b := range ep.Bindings {
+				addr, err := netip.ParseAddrPort(b.Address)
+				if err != nil || addr.Port() == 0 || addr.Addr().Is4In6() || addr.Addr().Zone() != "" || len(b.Error) > 2048 || (b.Network != "tcp4" && b.Network != "tcp6" && b.Network != "udp4" && b.Network != "udp6") || strings.HasSuffix(b.Network, "4") != addr.Addr().Is4() {
+					apiErr(w, 400, "invalid_runtime", "invalid listener binding")
+					return
+				}
+			}
 		}
 		runtimeJSON = encodeJSON(in.Runtime)
 	}
@@ -377,6 +394,18 @@ func validDeviceRuntime(runtime *model.DeviceRuntime, at time.Time) bool {
 	if runtime == nil {
 		return true
 	}
+	if len(runtime.Platform) > 32 || strings.ContainsAny(runtime.Platform, "\x00\r\n") {
+		return false
+	}
+	switch runtime.NetworkMode {
+	case "", "socket": // Empty fields remain valid for older clients.
+	case "tun", "transparent":
+		if runtime.Platform != "linux" {
+			return false
+		}
+	default:
+		return false
+	}
 	if runtime.SessionID != "" || runtime.Generation != 0 || !runtime.ReceivedAt.IsZero() ||
 		runtime.ReportedAt.Before(at.Add(-2*time.Minute)) || runtime.ReportedAt.After(at.Add(time.Minute)) ||
 		len(runtime.Carriers) > model.MaxDeviceRuntimeEntries || len(runtime.Endpoints) > model.MaxDeviceRuntimeEntries ||
@@ -394,7 +423,7 @@ func validDeviceRuntime(runtime *model.DeviceRuntime, at time.Time) bool {
 	validPast := func(value time.Time) bool { return value.IsZero() || !value.After(at.Add(time.Minute)) }
 	flows, quic, tls := 0, 0, 0
 	for _, c := range runtime.Carriers {
-		if !validEndpoint(c.EdgeID, c.Transport, c.Address, c.ServerName) || !validHandshake(c.HandshakeMS) || c.ActiveFlows < 0 || c.ActiveFlows > 1_000_000 || c.EstablishedAt.IsZero() || !validPast(c.EstablishedAt) || !validCarrierQuality(c, runtime.ReportedAt) {
+		if !validEndpoint(c.EdgeID, c.Transport, c.Address, c.ServerName) || !validRemoteAddress(c.Address, c.RemoteAddress) || !validHandshake(c.HandshakeMS) || c.ActiveFlows < 0 || c.ActiveFlows > 1_000_000 || c.EstablishedAt.IsZero() || !validPast(c.EstablishedAt) || !validCarrierQuality(c, runtime.ReportedAt) {
 			return false
 		}
 		flows += c.ActiveFlows
@@ -416,8 +445,8 @@ func validDeviceRuntime(runtime *model.DeviceRuntime, at time.Time) bool {
 	}
 	seen := make(map[string]bool, len(runtime.Endpoints))
 	for _, ep := range runtime.Endpoints {
-		key := deviceEndpointKey(ep.EdgeID, ep.Transport, ep.Address, ep.ServerName)
-		if !validEndpoint(ep.EdgeID, ep.Transport, ep.Address, ep.ServerName) || !validHandshake(ep.HandshakeMS) || ep.RecentFailures > 32 || !validPast(ep.LastAttempt) || !validPast(ep.LastSuccess) || ep.RetryAt.After(at.Add(2*time.Minute)) || seen[key] {
+		key := deviceEndpointKey(ep.EdgeID, ep.Transport, ep.Address, ep.ServerName) + "\x00" + ep.RemoteAddress
+		if !validEndpoint(ep.EdgeID, ep.Transport, ep.Address, ep.ServerName) || !validRemoteAddress(ep.Address, ep.RemoteAddress) || !validHandshake(ep.HandshakeMS) || ep.RecentFailures > 32 || !validPast(ep.LastAttempt) || !validPast(ep.LastSuccess) || ep.RetryAt.After(at.Add(2*time.Minute)) || seen[key] {
 			return false
 		}
 		seen[key] = true
@@ -428,6 +457,18 @@ func validDeviceRuntime(runtime *model.DeviceRuntime, at time.Time) bool {
 		}
 	}
 	return true
+}
+
+// RemoteAddress is an observation of a configured authority, not a new grant.
+// Older reports may omit it; new reports must use a unicast IP and the same port.
+func validRemoteAddress(configured, remote string) bool {
+	if remote == "" {
+		return true
+	}
+	_, port, err := net.SplitHostPort(configured)
+	p, pe := strconv.Atoi(port)
+	addr, ae := netip.ParseAddrPort(remote)
+	return err == nil && pe == nil && ae == nil && addr.Port() != 0 && int(addr.Port()) == p && !addr.Addr().IsUnspecified() && !addr.Addr().IsMulticast() && !addr.Addr().Is4In6() && addr.Addr().Zone() == ""
 }
 
 func deviceEndpointKey(edgeID, transport, address, serverName string) string {
@@ -548,8 +589,8 @@ func (s *Server) allocateGrant(ctx context.Context, tid, eid, boot string) (mode
 	if !edgeAllowed(q, eid) {
 		return model.Grant{}, nil
 	}
-	waitForCredit := q.PeriodBytes >= 0 && q.OverageAction == "throttle" && q.OverageBPS > 0
-	overage := waitForCredit && q.UsedBytes >= q.PeriodBytes
+	waitForCredit := q.PeriodBytes < 0 || q.OverageAction == "throttle" && q.OverageBPS > 0
+	overage := q.PeriodBytes >= 0 && waitForCredit && q.UsedBytes >= q.PeriodBytes
 	base, peak, burst := q.BaseBPS, q.PeakBPS, q.BurstBytes
 	if overage {
 		base, peak, burst = q.OverageBPS, q.OverageBPS, 0

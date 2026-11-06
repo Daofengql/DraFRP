@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -33,6 +34,13 @@ func main() {
 	}
 	if v := os.Getenv("DRAFRP_LISTEN"); v != "" {
 		c.Listen = v
+	}
+	if v := os.Getenv("DRAFRP_SECURE_COOKIES"); v != "" {
+		secure, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid DRAFRP_SECURE_COOKIES: %v", err)
+		}
+		c.SecureCookies = secure
 	}
 	if c.Listen == "" {
 		c.Listen = ":8080"

@@ -30,6 +30,7 @@ type probeSample struct {
 }
 type carrierProbeState struct {
 	enabled                atomic.Bool
+	reverse                atomic.Bool
 	running                atomic.Bool
 	mu                     sync.Mutex
 	samples                [ProbeWindowLimit]probeSample
@@ -37,7 +38,25 @@ type carrierProbeState struct {
 	lastAttempt, lastServe time.Time
 }
 
-func (c *Carrier) ProbeSupported() bool { return c.probe.enabled.Load() }
+func (c *Carrier) ProbeSupported() bool        { return c.probe.enabled.Load() }
+func (c *Carrier) ReverseProbeSupported() bool { return c.probe.reverse.Load() }
+
+// ReadFlow also recognizes the negotiated, fixed-size reverse control echo.
+// It leaves the original stream intact for QUIC reset and half-close handling.
+func (c *Carrier) ReadFlow(ctx context.Context, stream Stream, flow *Flow, authorized func() bool) (bool, error) {
+	var prefix [8]byte
+	if _, err := io.ReadFull(stream, prefix[:]); err != nil {
+		return false, err
+	}
+	reader := io.MultiReader(bytes.NewReader(prefix[:]), stream)
+	if prefix == probeMagic {
+		if c.ReverseProbeSupported() {
+			c.handleProbe(ctx, stream, reader, authorized)
+		}
+		return false, nil
+	}
+	return true, ReadJSON(reader, flow)
+}
 
 // ObserveQuality owns at most one request at a time, with fixed cadence, size,
 // timeout and memory. Authorization refers to the current renewable snapshot,
@@ -180,6 +199,10 @@ func (c *Carrier) exchangeProbe(ctx context.Context) error {
 // pending, at most once a second, and never consumes a business flow permit.
 // In particular, JSON Flow messages on Agent-initiated streams stay rejected.
 func (c *Carrier) HandleProbe(ctx context.Context, stream Stream, authorized func() bool) {
+	c.handleProbe(ctx, stream, stream, authorized)
+}
+
+func (c *Carrier) handleProbe(ctx context.Context, stream Stream, reader io.Reader, authorized func() bool) {
 	finished := false
 	defer func() {
 		if finished {
@@ -209,7 +232,7 @@ func (c *Carrier) HandleProbe(ctx context.Context, stream Stream, authorized fun
 	stop := context.AfterFunc(ctx, func() { Abort(stream) })
 	defer stop()
 	var request [24]byte
-	if _, err := io.ReadFull(stream, request[:]); err != nil || !bytes.Equal(request[:8], probeMagic[:]) {
+	if _, err := io.ReadFull(reader, request[:]); err != nil || !bytes.Equal(request[:8], probeMagic[:]) {
 		return
 	}
 	if ctx.Err() != nil || !authorized() {

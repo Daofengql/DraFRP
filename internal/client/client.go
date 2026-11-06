@@ -9,6 +9,7 @@ import (
 	"drafrp/internal/model"
 	"drafrp/internal/native"
 	"drafrp/internal/protocol"
+	"drafrp/internal/tun"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,10 +17,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +44,7 @@ type Config struct {
 	Bind               bool          `json:"bind"`
 	NativeReturnCIDRs  []string      `json:"native_return_cidrs"`
 	NativeFlowLimit    int           `json:"native_flow_limit"`
+	TUN                *tun.Config   `json:"tun,omitempty"`
 }
 
 // PublicKeyFingerprint matches the console binding inspection contract:
@@ -105,8 +110,11 @@ type Agent struct {
 	closing        bool
 	stateLock      *os.File
 	native         *native.Manager
+	tun            *tun.Manager
 	pendingStreams int
 	pathHealth     map[endpointKey]*endpointHealth
+	dialSlots      chan struct{}
+	lookupIP       func(context.Context, string, string) ([]netip.Addr, error)
 }
 
 func New(c Config) (*Agent, error) {
@@ -123,6 +131,9 @@ func New(c Config) (*Agent, error) {
 	}
 	if c.NetworkMode != "socket" && c.NetworkMode != "tun" && c.NetworkMode != "transparent" {
 		return nil, errors.New("invalid network_mode")
+	}
+	if runtime.GOOS != "linux" && c.NetworkMode != "socket" {
+		return nil, errors.New("source IP/port passthrough requires a Linux client; use network_mode socket on " + runtime.GOOS)
 	}
 	if c.MaxCarriersPerEdge > 8 {
 		return nil, errors.New("max_carriers_per_edge must be <=8")
@@ -142,7 +153,7 @@ func New(c Config) (*Agent, error) {
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &Agent{cfg: c, http: h, ctx: ctx, cancel: cancel, carriers: map[string]*protocol.Carrier{}, carrierEdges: map[string]model.Edge{}, flows: map[protocol.Stream]activeFlow{}, transports: map[string]*http.Transport{}, pathHealth: map[endpointKey]*endpointHealth{}}
+	a := &Agent{cfg: c, http: h, ctx: ctx, cancel: cancel, carriers: map[string]*protocol.Carrier{}, carrierEdges: map[string]model.Edge{}, flows: map[protocol.Stream]activeFlow{}, transports: map[string]*http.Transport{}, pathHealth: map[endpointKey]*endpointHealth{}, dialSlots: make(chan struct{}, 4), lookupIP: net.DefaultResolver.LookupNetIP}
 	if e = os.MkdirAll(c.StateDir, 0700); e != nil {
 		cancel()
 		return nil, e
@@ -190,6 +201,18 @@ func New(c Config) (*Agent, error) {
 	}
 	if c.NetworkMode == "transparent" {
 		a.native, e = native.New(native.Config{StateDir: c.StateDir, ReturnCIDRs: c.NativeReturnCIDRs, MaxFlows: c.NativeFlowLimit})
+		if e != nil {
+			cancel()
+			return nil, e
+		}
+	}
+	if c.NetworkMode == "tun" {
+		cfg := tun.Config{StateDir: c.StateDir, ReturnCIDRs: c.NativeReturnCIDRs, MaxFlows: c.NativeFlowLimit}
+		if c.TUN != nil {
+			cfg = *c.TUN
+			cfg.StateDir = c.StateDir
+		}
+		a.tun, e = tun.New(cfg)
 		if e != nil {
 			cancel()
 			return nil, e
@@ -264,6 +287,11 @@ func (a *Agent) Close() {
 		if a.native != nil {
 			if err := a.native.Close(); err != nil {
 				log.Printf("native network cleanup: %v", err)
+			}
+		}
+		if a.tun != nil {
+			if err := a.tun.Close(); err != nil {
+				log.Printf("TUN network cleanup: %v", err)
 			}
 		}
 		_ = a.stateLock.Close()
@@ -364,6 +392,9 @@ func (a *Agent) Sync(ctx context.Context) (model.ClientSnapshot, error) {
 	if a.native != nil {
 		capabilities = append(capabilities, a.native.Capabilities()...)
 	}
+	if a.tun != nil {
+		capabilities = append(capabilities, a.tun.Capabilities()...)
+	}
 	in := model.ClientSyncRequest{DeviceID: a.st.DeviceID, SessionID: a.st.SessionID, Timestamp: time.Now().Unix(), Nonce: protocol.ID(), AppliedRevision: a.snap.Revision, Capabilities: capabilities, Runtime: a.runtimeStatusLocked()}
 	a.mu.RUnlock()
 	if in.DeviceID == "" {
@@ -449,6 +480,13 @@ func (a *Agent) reconcileLocked() {
 		_, edgeExists := edges[f.edgeID]
 		if !valid || !edgeExists || !ok || r.Version != f.rule.Version || r.EdgeID != f.edgeID || f.generation != a.snap.Device.Generation {
 			f.cancel()
+		}
+		if a.tun != nil && f.rule.SourceMode == "native" {
+			select {
+			case <-a.tun.Failed():
+				f.cancel()
+			default:
+			}
 		}
 	}
 	for k, t := range a.transports {

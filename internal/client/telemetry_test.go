@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	goRuntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,9 @@ func TestRuntimeSamplesAuthenticatedCarriersAndFlows(t *testing.T) {
 			}
 			a.mu.Unlock()
 			runtime := a.RuntimeStatus()
+			if runtime.Platform != goRuntime.GOOS || runtime.NetworkMode != "socket" {
+				t.Fatal("client platform/network mode missing", runtime)
+			}
 			if runtime.ActiveCarriers != 1 || runtime.ActiveFlows != 1 || len(runtime.Carriers) != 1 || len(runtime.Endpoints) != 1 || runtime.Truncated {
 				t.Fatalf("real carrier/flow was not sampled: %+v", runtime)
 			}

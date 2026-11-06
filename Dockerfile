@@ -22,7 +22,15 @@ RUN CGO_ENABLED=0 go build -trimpath -tags release -ldflags "-s -w -X drafrp/int
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X drafrp/internal/buildinfo.Version=$VERSION -X drafrp/internal/buildinfo.Commit=$COMMIT" -o /out/drafrp-client ./cmd/drafrp-client
 
 FROM alpine:3.22 AS runtime
-RUN apk add --no-cache ca-certificates && adduser -D -u 10001 drafrp
+RUN apk add --no-cache ca-certificates \
+ && adduser -D -u 10001 drafrp \
+ && mkdir -p /var/lib/drafrp-client \
+ && chown drafrp:drafrp /var/lib/drafrp-client
+COPY LICENSE /usr/share/licenses/drafrp/LICENSE
+COPY licenses/go/ /usr/share/licenses/drafrp/go/
+COPY licenses/npm-production/ /usr/share/licenses/drafrp/npm-production/
+COPY licenses/gvisor-LICENSE.txt /usr/share/licenses/drafrp/gvisor-LICENSE.txt
+COPY THIRD-PARTY-NOTICES.md /usr/share/doc/drafrp/THIRD-PARTY-NOTICES.md
 WORKDIR /app
 USER drafrp
 
@@ -45,3 +53,5 @@ RUN apk add --no-cache iproute2
 FROM client AS client-native
 USER root
 RUN apk add --no-cache iproute2 iptables
+
+FROM client-native AS client-tun

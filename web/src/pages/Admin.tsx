@@ -450,6 +450,7 @@ function EdgeForm({
     ca_cert: initial?.ca_cert || "",
     endpoints: initial?.endpoints || [
       { transport: "quic", address: "", server_name: "" },
+      { transport: "tls", address: "", server_name: "" },
     ],
     token: initial ? "" : randomToken(),
   });
@@ -499,13 +500,17 @@ function EdgeForm({
   };
   const submit = () => {
     if (
+      form.endpoints.length !== 2 ||
+      new Set(form.endpoints.map((e) => e.transport)).size !== 2 ||
       form.endpoints.some(
         (e) =>
           !/^(\[[0-9a-fA-F:]+\]|[^\s:]+):\d+$/.test(e.address) ||
           !e.server_name.trim(),
       )
     ) {
-      setValidation("每个承载入口必须有 host:port 地址及 TLS server_name。");
+      setValidation(
+        "需要一个 QUIC/UDP 和一个 TLS/TCP 入口，各自填写 host:port 和 TLS server_name。",
+      );
       return;
     }
     if (
@@ -569,10 +574,10 @@ function EdgeForm({
                 label="业务监听地址（可选）"
                 value={form.listen_host}
                 onChange={(e) => set("listen_host", e.target.value)}
-                helperText="不含端口；留空使用默认地址"
+                helperText="IPv4 业务地址，不含端口；实际监听由出口节点本地配置决定"
               />
               <Typography variant="h6">
-                承载入口（客户端 → 出口节点）
+                两个专用承载入口（客户端 → 出口节点）
               </Typography>
               {form.endpoints.map((ep, i) => (
                 <Paper variant="outlined" key={i} sx={{ p: 2 }}>
@@ -609,7 +614,7 @@ function EdgeForm({
                     </Stack>
                     <Button
                       color="error"
-                      disabled={form.endpoints.length === 1}
+                      disabled={form.endpoints.length <= 2}
                       onClick={() =>
                         set(
                           "endpoints",
@@ -624,7 +629,7 @@ function EdgeForm({
               ))}
               <Button
                 variant="outlined"
-                disabled={form.endpoints.length >= 16}
+                disabled={form.endpoints.length >= 2}
                 onClick={() =>
                   set("endpoints", [
                     ...form.endpoints,
@@ -634,6 +639,10 @@ function EdgeForm({
               >
                 添加承载入口
               </Button>
+              <Typography variant="body2" color="text.secondary">
+                域名可发布 A/AAAA，客户端自动选择
+                IPv4/IPv6。同一组端口供所有客户端与规则共享。
+              </Typography>
               <TextField
                 label="承载 TLS CA PEM（可选）"
                 value={form.ca_cert}

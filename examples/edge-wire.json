@@ -5,6 +5,8 @@
   "cert_file": "/etc/drafrp/carrier.crt",
   "key_file": "/etc/drafrp/carrier.key",
   "listen_host": "0.0.0.0",
+  "carrier_listen_hosts": ["0.0.0.0", "::"],
+  "http_listen_hosts": ["0.0.0.0", "::"],
   "sync_interval": "20s",
   "max_connections": 1024,
   "max_udp_sessions": 128,

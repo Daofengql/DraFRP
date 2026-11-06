@@ -138,6 +138,14 @@ export default function DeviceTransport({ device }: { device: Device }) {
                     {carrier.edge_id}
                   </Typography>
                   {carrier.address}
+                  {carrier.remote_address && (
+                    <Typography variant="caption" display="block">
+                      实际连接：
+                      {carrier.remote_address.includes("[")
+                        ? "IPv6"
+                        : "IPv4"} · {carrier.remote_address}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>{carrier.transport.toUpperCase()}</TableCell>
                 <TableCell>{carrier.active_flows}</TableCell>
@@ -160,7 +168,8 @@ export default function DeviceTransport({ device }: { device: Device }) {
               sx={{ p: 2, overflowWrap: "anywhere" }}
             >
               <Typography variant="subtitle2" gutterBottom>
-                {carrier.transport.toUpperCase()} · {carrier.address}
+                {carrier.transport.toUpperCase()} ·{" "}
+                {carrier.remote_address || carrier.address}
               </Typography>
               <QualityObservation quality={carrier.quality} />
             </Paper>
@@ -184,13 +193,18 @@ export default function DeviceTransport({ device }: { device: Device }) {
           <TableBody>
             {runtime.endpoints.map((endpoint) => (
               <TableRow
-                key={`${endpoint.edge_id}/${endpoint.transport}/${endpoint.address}/${endpoint.server_name}`}
+                key={`${endpoint.edge_id}/${endpoint.transport}/${endpoint.address}/${endpoint.server_name}/${endpoint.remote_address || ""}`}
               >
                 <TableCell>
                   <Typography className="mono" variant="body2">
                     {endpoint.edge_id}
                   </Typography>
                   {endpoint.transport.toUpperCase()} · {endpoint.address}
+                  {endpoint.remote_address && (
+                    <Typography variant="caption" display="block">
+                      候选地址：{endpoint.remote_address}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>
                   {endpoint.probing

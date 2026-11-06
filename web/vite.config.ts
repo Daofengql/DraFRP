@@ -26,11 +26,12 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: process.env.DRAFRP_DEV_PROXY || "http://127.0.0.1:8080",
-        changeOrigin: true,
+        // Keep the browser Host aligned with Origin for the cloud's CSRF checks.
+        changeOrigin: false,
       },
       "/auth": {
         target: process.env.DRAFRP_DEV_PROXY || "http://127.0.0.1:8080",
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

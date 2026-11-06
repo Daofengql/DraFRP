@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"drafrp/internal/model"
@@ -22,6 +23,7 @@ type endpointKey struct {
 	Generation                  uint64
 	Endpoint                    model.Endpoint
 	CA                          [32]byte
+	RemoteAddress               string
 }
 type endpointHealth struct {
 	Failures    uint
@@ -32,22 +34,25 @@ type endpointHealth struct {
 	ErrorCode   string
 	LastError   string
 	Probing     bool
+	RTT         time.Duration
+	RTTAt       time.Time
 }
 
 // EndpointStatus describes bounded, local connection attempts. HandshakeMS
 // includes carrier establishment and device admission; it is not steady RTT.
 type EndpointStatus struct {
-	EdgeID      string    `json:"edge_id"`
-	Transport   string    `json:"transport"`
-	Address     string    `json:"address"`
-	Failures    uint      `json:"recent_failures"`
-	RetryAt     time.Time `json:"retry_at,omitempty"`
-	LastAttempt time.Time `json:"last_attempt,omitempty"`
-	LastSuccess time.Time `json:"last_success,omitempty"`
-	HandshakeMS float64   `json:"handshake_ms"`
-	ErrorCode   string    `json:"error_code,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
-	Probing     bool      `json:"probing"`
+	EdgeID        string    `json:"edge_id"`
+	Transport     string    `json:"transport"`
+	Address       string    `json:"address"`
+	RemoteAddress string    `json:"remote_address,omitempty"`
+	Failures      uint      `json:"recent_failures"`
+	RetryAt       time.Time `json:"retry_at,omitempty"`
+	LastAttempt   time.Time `json:"last_attempt,omitempty"`
+	LastSuccess   time.Time `json:"last_success,omitempty"`
+	HandshakeMS   float64   `json:"handshake_ms"`
+	ErrorCode     string    `json:"error_code,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	Probing       bool      `json:"probing"`
 }
 
 type endpointCooldownError struct{ RetryAt time.Time }
@@ -56,7 +61,18 @@ func (e *endpointCooldownError) Error() string {
 	return fmt.Sprintf("authorized endpoints are cooling down until %s", e.RetryAt.UTC().Format(time.RFC3339Nano))
 }
 func pathKey(edge model.Edge, ep model.Endpoint, d model.DeviceGrant) endpointKey {
-	return endpointKey{EdgeID: edge.ID, DeviceID: d.DeviceID, SessionID: d.SessionID, Generation: d.Generation, Endpoint: ep, CA: sha256.Sum256([]byte(edge.CACert))}
+	k := endpointKey{EdgeID: edge.ID, DeviceID: d.DeviceID, SessionID: d.SessionID, Generation: d.Generation, Endpoint: ep, CA: sha256.Sum256([]byte(edge.CACert))}
+	if addr, err := netip.ParseAddrPort(ep.Address); err == nil {
+		k.RemoteAddress = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()).String()
+	}
+	return k
+}
+func carrierPathKey(edge model.Edge, c *protocol.Carrier) endpointKey {
+	k := pathKey(edge, c.Endpoint, c.Device)
+	if c.RemoteAddress != "" {
+		k.RemoteAddress = c.RemoteAddress
+	}
+	return k
 }
 func (a *Agent) endpointAuthorizedLocked(k endpointKey) bool {
 	d := a.snap.Device
@@ -76,8 +92,14 @@ func (a *Agent) endpointAuthorizedLocked(k endpointKey) bool {
 	return false
 }
 func (a *Agent) pruneEndpointHealthLocked() {
-	for k := range a.pathHealth {
-		if !a.endpointAuthorizedLocked(k) {
+	active := make(map[endpointKey]bool, len(a.carriers))
+	for id, c := range a.carriers {
+		active[carrierPathKey(a.carrierEdges[id], c)] = true
+	}
+	for k, h := range a.pathHealth {
+		// DNS rotation must not retain failed addresses forever. Active paths
+		// refresh their observations when maintenance evaluates candidates.
+		if !a.endpointAuthorizedLocked(k) || !h.Probing && !active[k] && time.Since(maxTime(h.LastAttempt, h.LastSuccess)) > 10*time.Minute {
 			delete(a.pathHealth, k)
 		}
 	}
@@ -102,6 +124,10 @@ func (a *Agent) beginEndpoint(k endpointKey, started time.Time) bool {
 	}
 	h := a.pathHealth[k]
 	if h == nil {
+		a.pruneEndpointHealthLocked()
+		if len(a.pathHealth) >= 2048 {
+			return false
+		}
 		h = &endpointHealth{}
 		a.pathHealth[k] = h
 	}
@@ -113,6 +139,13 @@ func (a *Agent) beginEndpoint(k endpointKey, started time.Time) bool {
 	}
 	h.Probing, h.LastAttempt = true, started
 	return true
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 func endpointBackoff(failures uint) time.Duration {
 	// Two seconds to one minute, with 0..25% cryptographic jitter. The cap
@@ -170,7 +203,7 @@ func (a *Agent) finishEndpoint(k endpointKey, started time.Time, err error, call
 	}
 }
 func (a *Agent) disconnectedEndpointLocked(edge model.Edge, c *protocol.Carrier) {
-	k := pathKey(edge, c.Endpoint, c.Device)
+	k := carrierPathKey(edge, c)
 	h := a.pathHealth[k]
 	if h == nil || !a.endpointAuthorizedLocked(k) {
 		return
@@ -188,7 +221,7 @@ func (a *Agent) EndpointStatus() []EndpointStatus {
 	out := make([]EndpointStatus, 0, len(a.pathHealth))
 	for k, h := range a.pathHealth {
 		if a.endpointAuthorizedLocked(k) {
-			out = append(out, EndpointStatus{EdgeID: k.EdgeID, Transport: k.Endpoint.Transport, Address: k.Endpoint.Address, Failures: h.Failures, RetryAt: h.RetryAt, LastAttempt: h.LastAttempt, LastSuccess: h.LastSuccess, HandshakeMS: float64(h.Handshake) / float64(time.Millisecond), ErrorCode: h.ErrorCode, LastError: h.LastError, Probing: h.Probing})
+			out = append(out, EndpointStatus{EdgeID: k.EdgeID, Transport: k.Endpoint.Transport, Address: k.Endpoint.Address, RemoteAddress: k.RemoteAddress, Failures: h.Failures, RetryAt: h.RetryAt, LastAttempt: h.LastAttempt, LastSuccess: h.LastSuccess, HandshakeMS: float64(h.Handshake) / float64(time.Millisecond), ErrorCode: h.ErrorCode, LastError: h.LastError, Probing: h.Probing})
 		}
 	}
 	return out

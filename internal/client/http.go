@@ -79,7 +79,7 @@ func (a *Agent) originTransport(r model.Rule) (*http.Transport, error) {
 	// still multiplexes independent requests, and origin keep-alive is reused.
 	tc.NextProtos = []string{"http/1.1"}
 	t := &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		return a.dialTarget(ctx, network, address)
+		return a.dialTargetFamily(ctx, network, address, "", false)
 	}, TLSClientConfig: tc, TLSHandshakeTimeout: 8 * time.Second, ResponseHeaderTimeout: ruleTimeout(r), ExpectContinueTimeout: time.Second, IdleConnTimeout: 30 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 8, MaxConnsPerHost: 64, MaxResponseHeaderBytes: 64 << 10, ForceAttemptHTTP2: false}
 	a.transports[key] = t
 	return t, nil

@@ -25,6 +25,7 @@ services:
       DRAFRP_STORAGE_KEY: ${DRAFRP_STORAGE_KEY:?set a persistent base64 AES key}
       DRAFRP_ADMIN_USERNAME: ${DRAFRP_ADMIN_USERNAME:-admin}
       DRAFRP_ADMIN_PASSWORD: ${DRAFRP_ADMIN_PASSWORD:?set initial admin password}
+      DRAFRP_SECURE_COOKIES: ${DRAFRP_SECURE_COOKIES:-false}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

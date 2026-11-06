@@ -38,6 +38,8 @@ type Device struct {
 // these observations never grant forwarding authority. Carrier quality names
 // its own measurement source and interval independently of handshake timing.
 type DeviceRuntime struct {
+	Platform           string                  `json:"platform,omitempty"`
+	NetworkMode        string                  `json:"network_mode,omitempty"`
 	ReportedAt         time.Time               `json:"reported_at"`
 	ReceivedAt         time.Time               `json:"received_at,omitempty"`
 	SessionID          string                  `json:"session_id,omitempty"`
@@ -57,6 +59,7 @@ type DeviceCarrierRuntime struct {
 	EdgeID        string                 `json:"edge_id"`
 	Transport     string                 `json:"transport"`
 	Address       string                 `json:"address"`
+	RemoteAddress string                 `json:"remote_address,omitempty"`
 	ServerName    string                 `json:"server_name"`
 	ActiveFlows   int                    `json:"active_flows"`
 	EstablishedAt time.Time              `json:"established_at"`
@@ -68,6 +71,7 @@ type DeviceEndpointRuntime struct {
 	EdgeID         string    `json:"edge_id"`
 	Transport      string    `json:"transport"`
 	Address        string    `json:"address"`
+	RemoteAddress  string    `json:"remote_address,omitempty"`
 	ServerName     string    `json:"server_name"`
 	RecentFailures uint      `json:"recent_failures"`
 	RetryAt        time.Time `json:"retry_at,omitempty"`
@@ -88,7 +92,15 @@ type Endpoint struct {
 
 // EndpointRuntime is an edge observation, not a promise inferred from config.
 type EndpointRuntime struct {
-	Transport string `json:"transport"`
+	Transport string            `json:"transport"`
+	Address   string            `json:"address"`
+	Listening bool              `json:"listening"`
+	Error     string            `json:"error,omitempty"`
+	Bindings  []ListenerRuntime `json:"bindings,omitempty"`
+}
+
+type ListenerRuntime struct {
+	Network   string `json:"network"`
 	Address   string `json:"address"`
 	Listening bool   `json:"listening"`
 	Error     string `json:"error,omitempty"`
@@ -98,6 +110,7 @@ type EdgeRuntime struct {
 	ReportedAt          time.Time         `json:"reported_at"`
 	SnapshotExpiresAt   time.Time         `json:"snapshot_expires_at"`
 	Endpoints           []EndpointRuntime `json:"endpoints"`
+	Sites               []EndpointRuntime `json:"sites,omitempty"`
 	ActiveFlows         int               `json:"active_flows"`
 	ActiveCarriers      int               `json:"active_carriers"`
 	QUICCarriers        int               `json:"quic_carriers"`

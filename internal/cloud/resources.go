@@ -611,6 +611,9 @@ func validTarget(proto, target string) bool {
 	if proto == "tcp" || proto == "udp" {
 		h, p, e := net.SplitHostPort(target)
 		port, pe := strconv.Atoi(p)
+		if strings.ContainsAny(h, ":%[]") {
+			return false
+		}
 		return e == nil && pe == nil && h != "" && port > 0 && port <= 65535
 	}
 	u, e := url.Parse(target)

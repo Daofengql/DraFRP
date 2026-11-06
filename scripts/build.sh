@@ -16,12 +16,21 @@ out="bin/$version/$target_os-$target_arch"
 mkdir -p "$out"
 suffix=''
 if [ "$target_os" = windows ]; then suffix='.exe'; fi
-for role in cloud edge client; do
+roles=(cloud client)
+if [ "$target_os" = linux ]; then roles=(cloud edge client); fi
+if [ "$target_os" != linux ]; then rm -f "$out/drafrp-edge$suffix"; fi
+for role in "${roles[@]}"; do
   CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -trimpath -tags release \
     -ldflags "-s -w -X drafrp/internal/buildinfo.Version=$version -X drafrp/internal/buildinfo.Commit=$commit" \
     -o "$out/drafrp-$role$suffix" "./cmd/drafrp-$role"
 done
 cp -R examples "$out/"
-cp README.md IMPLEMENTATION.md API-CONTRACT.md SCHEMA-INTEGRITY.md "$out/"
+rm -f "$out/examples/edge-tun.json"
+cp README.md README.en.md CONTRIBUTING.md CONTRIBUTING.en.md SECURITY.md SECURITY.en.md LICENSE THIRD-PARTY-NOTICES.md "$out/"
+mkdir -p "$out/docs" "$out/licenses"
+cp docs/README.md docs/README.en.md "$out/docs/"
+cp -R docs/design docs/en docs/guides docs/performance docs/reference "$out/docs/"
+cp -R licenses/go licenses/npm-production "$out/licenses/"
+cp licenses/gvisor-LICENSE.txt "$out/licenses/"
 (cd "$out" && sha256sum drafrp-* > SHA256SUMS)
 printf '%s\n' "$out"

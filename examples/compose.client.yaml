@@ -1,0 +1,20 @@
+services:
+  client:
+    profiles: ["client"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: client
+    image: drafrp-client:local
+    network_mode: host
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${DRAFRP_CLIENT_CONFIG:?set the host path to client.json}:/etc/drafrp/client.json:ro
+      - client-state:/var/lib/drafrp-client
+    command: ["--config", "/etc/drafrp/client.json"]
+    restart: unless-stopped
+
+volumes:
+  client-state:

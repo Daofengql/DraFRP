@@ -59,7 +59,7 @@ func TestMultiEdgeSharesAccountAuthority(t *testing.T) {
 	for i := range nodes {
 		carrier, business := port(), port()
 		token := strings.Repeat(fmt.Sprintf("multi-edge-%d-", i), 3)
-		browser.api("POST", "/api/v1/edges", map[string]any{"name": fmt.Sprintf("shared-edge-%d", i), "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": []model.Endpoint{{Transport: "tls", Address: address(carrier), ServerName: "edge.test"}}, "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": business, "port_max": business, "max_carriers": 8, "capacity_bps": -1}, &nodes[i].edge, 201)
+		browser.api("POST", "/api/v1/edges", map[string]any{"name": fmt.Sprintf("shared-edge-%d", i), "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": carrierEndpoints(carrier), "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": business, "port_max": business, "max_carriers": 8, "capacity_bps": -1}, &nodes[i].edge, 201)
 		nodes[i].port = business
 		nodes[i].runtime = edge.New(edge.Config{CloudURL: browser.url, EdgeID: nodes[i].edge.ID, Token: token, CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1"})
 		t.Cleanup(nodes[i].runtime.Close)

@@ -1,0 +1,24 @@
+services:
+  cloud:
+    environment:
+      DRAFRP_SECURE_COOKIES: "true"
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    environment:
+      DRAFRP_DOMAIN: ${DRAFRP_DOMAIN:?set the public control-plane DNS name}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - cloud
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

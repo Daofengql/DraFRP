@@ -24,7 +24,7 @@ func TestACLObservationFullSystem(t *testing.T) {
 	carrierPort, businessPort, httpPort, httpsPort := freePort(t), freePort(t), freePort(t), freePort(t)
 	token := strings.Repeat("acl-system-token-", 3)
 	var edgeInfo model.Edge
-	b.api("POST", "/api/v1/edges", map[string]any{"name": "acl-system-edge", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": []model.Endpoint{{Transport: "tls", Address: address(carrierPort), ServerName: "edge.test"}}, "ca_cert": cert, "http_port": httpPort, "https_port": httpsPort, "port_min": businessPort, "port_max": businessPort, "max_carriers": 8, "capacity_bps": -1}, &edgeInfo, 201)
+	b.api("POST", "/api/v1/edges", map[string]any{"name": "acl-system-edge", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": carrierEndpoints(carrierPort), "ca_cert": cert, "http_port": httpPort, "https_port": httpsPort, "port_min": businessPort, "port_max": businessPort, "max_carriers": 8, "capacity_bps": -1}, &edgeInfo, 201)
 	r := edge.New(edge.Config{CloudURL: b.url, EdgeID: edgeInfo.ID, Token: token, CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1", UDPIdleTimeout: 200 * time.Millisecond})
 	defer r.Close()
 	agent, err := client.New(client.Config{CloudURL: b.url, StateDir: t.TempDir(), Transport: "tls_only"})

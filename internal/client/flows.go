@@ -5,6 +5,7 @@ import (
 	"drafrp/internal/model"
 	"drafrp/internal/protocol"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -30,6 +31,9 @@ func (a *Agent) dialTarget(ctx context.Context, network, address string) (net.Co
 	return a.dialTargetPeer(ctx, network, address, "")
 }
 func (a *Agent) dialTargetPeer(ctx context.Context, network, address, peer string) (net.Conn, error) {
+	return a.dialTargetFamily(ctx, network, address, peer, true)
+}
+func (a *Agent) dialTargetFamily(ctx context.Context, network, address, peer string, ipv4Only bool) (net.Conn, error) {
 	host, p, e := net.SplitHostPort(address)
 	if e != nil {
 		return nil, e
@@ -47,13 +51,32 @@ func (a *Agent) dialTargetPeer(ctx context.Context, network, address, peer strin
 			return nil, errors.New("target_scope_denied: port is outside local allowlist")
 		}
 	}
-	resolved, e := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	lookup := a.lookupIP
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupNetIP
+	}
+	family := "ip"
+	if ipv4Only {
+		family = "ip4"
+		if ip, err := netip.ParseAddr(host); err == nil && !ip.Unmap().Is4() {
+			return nil, errors.New("address_family_unsupported: TCP/UDP target requires IPv4")
+		}
+	}
+	resolved, e := lookup(ctx, family, host)
 	if e != nil {
+		var dns *net.DNSError
+		if ipv4Only && errors.As(e, &dns) && dns.IsNotFound {
+			return nil, fmt.Errorf("address_family_unsupported: TCP/UDP target has no IPv4 address: %w", e)
+		}
 		return nil, e
 	}
 	var last error
 	for _, ip := range resolved {
 		ip = ip.Unmap()
+		if ipv4Only && !ip.Is4() {
+			last = errors.New("address_family_unsupported: TCP/UDP target requires IPv4")
+			continue
+		}
 		if ip.IsUnspecified() || ip.IsMulticast() {
 			last = errors.New("target_scope_denied: target must be unicast")
 			continue
@@ -69,7 +92,7 @@ func (a *Agent) dialTargetPeer(ctx context.Context, network, address, peer strin
 		}
 		var conn net.Conn
 		if peer != "" {
-			if a.native == nil {
+			if a.native == nil && a.tun == nil {
 				return nil, errors.New("native_source_unavailable")
 			}
 			from, err := netip.ParseAddrPort(peer)
@@ -77,7 +100,11 @@ func (a *Agent) dialTargetPeer(ctx context.Context, network, address, peer strin
 				return nil, err
 			}
 			from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
-			conn, e = a.native.Dial(ctx, network, netip.AddrPortFrom(ip, uint16(port)), from)
+			if a.tun != nil {
+				conn, e = a.tun.Dial(ctx, network, netip.AddrPortFrom(ip, uint16(port)), from)
+			} else {
+				conn, e = a.native.Dial(ctx, network, netip.AddrPortFrom(ip, uint16(port)), from)
+			}
 		} else {
 			conn, e = (&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ip.String(), p))
 		}
@@ -97,7 +124,17 @@ func (a *Agent) serveStream(c *protocol.Carrier, st protocol.Stream) {
 	defer protocol.Finish(st)
 	_ = st.SetDeadline(time.Now().Add(10 * time.Second))
 	var f protocol.Flow
-	if e := protocol.ReadJSON(st, &f); e != nil {
+	flow, err := c.ReadFlow(a.ctx, st, &f, func() bool {
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		for _, edge := range a.snap.Edges {
+			if edge.ID == c.EdgeID {
+				return a.endpointAuthorizedLocked(pathKey(edge, c.Endpoint, c.Device))
+			}
+		}
+		return false
+	})
+	if err != nil || !flow {
 		return
 	}
 	a.mu.Lock()
@@ -128,6 +165,18 @@ func (a *Agent) serveStream(c *protocol.Carrier, st protocol.Stream) {
 			}
 		}
 	}
+	if rule.SourceMode == "native" && a.tun != nil && (rule.Protocol == "tcp" || rule.Protocol == "udp") {
+		peer, err := netip.ParseAddrPort(f.Peer)
+		if err == nil && peer.Addr().Unmap().Is4() {
+			for _, capability := range a.tun.Capabilities() {
+				sourceOK = sourceOK || capability == "tun_client_"+rule.Protocol+"_ipv4_ip_port"
+			}
+		}
+	}
+	// Reject the previous dual-TUN packet wire format explicitly.
+	if f.DataPath != "" || f.IPDestination != "" {
+		sourceOK = false
+	}
 	valid := !a.closing && len(a.flows) < 1024 && edgeAllowed && time.Now().Before(a.snap.ExpiresAt) && time.Now().Before(d.ExpiresAt) && f.ID != 0 && rule.ID != "" && rule.Version == f.Version && rule.Enabled && !rule.Deleting && rule.DeviceID == d.DeviceID && rule.TenantID == d.TenantID && rule.EdgeID == c.EdgeID && c.Device.DeviceID == d.DeviceID && c.Device.TenantID == d.TenantID && c.Device.SessionID == d.SessionID && c.Device.Generation == d.Generation && f.Generation == d.Generation && f.Protocol == rule.Protocol && sourceOK
 	select {
 	case <-c.Done():
@@ -142,6 +191,10 @@ func (a *Agent) serveStream(c *protocol.Carrier, st protocol.Stream) {
 	}
 	if (rule.Protocol == "http" || rule.Protocol == "https") && (f.Host != rule.Domain || f.Scheme != "http" && f.Scheme != "https" || f.IngressPort < 1 || f.IngressPort > 65535) {
 		valid = false
+	}
+	if rule.Protocol == "tcp" || rule.Protocol == "udp" {
+		peer, err := netip.ParseAddrPort(f.Peer)
+		valid = valid && err == nil && peer.Addr().Unmap().Is4()
 	}
 	if !valid {
 		a.mu.Unlock()

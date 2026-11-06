@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,58 +15,54 @@ import (
 func (r *Runtime) ensureListenersLocked() {
 	desired := map[string]bool{}
 	for _, ep := range r.snap.Edge.Endpoints {
-		key := "carrier/" + ep.Transport + "/" + ep.Address
-		desired[key] = true
-		if _, ok := r.listeners[key]; ok {
-			continue
-		}
-		_, p, e := net.SplitHostPort(ep.Address)
-		if e != nil {
-			r.listenerErrors[key] = e.Error()
-			continue
-		}
-		addr := net.JoinHostPort(r.cfg.ListenHost, p)
-		switch ep.Transport {
-		case "quic":
-			l, e := ListenQUIC(r.cfg, addr)
-			if e != nil {
-				r.listenerErrors[key] = e.Error()
+		for _, b := range r.carrierBindings(ep) {
+			key, addr := b.key, b.address
+			desired[key] = true
+			if _, ok := r.listeners[key]; ok {
 				continue
 			}
-			r.listeners[key] = listenerState{l, "carrier", "", addr}
-			delete(r.listenerErrors, key)
-			r.launchLocked(func() {
-				for {
-					q, e := l.Accept(r.ctx)
-					if e != nil {
-						r.listenerStopped(key, l, e)
-						return
-					}
-					c := protocol.WrapQUIC(q, r.cfg.EdgeID)
-					r.mu.Lock()
-					if !r.launchLocked(func() { r.serveCarrier(r.ctx, c, key) }) {
-						_ = c.Close()
-					}
-					r.mu.Unlock()
+			switch ep.Transport {
+			case "quic":
+				l, e := listenQUICNetwork(r.cfg, b.network, addr)
+				if e != nil {
+					r.listenerErrors[key] = e.Error()
+					continue
 				}
-			})
-		case "tls":
-			pair, e := tls.LoadX509KeyPair(r.cfg.CertFile, r.cfg.KeyFile)
-			if e != nil {
-				r.listenerErrors[key] = e.Error()
-				continue
+				r.listeners[key] = listenerState{l, "carrier", "", addr}
+				delete(r.listenerErrors, key)
+				r.launchLocked(func() {
+					for {
+						q, e := l.Accept(r.ctx)
+						if e != nil {
+							r.listenerStopped(key, l, e)
+							return
+						}
+						c := protocol.WrapQUIC(q, r.cfg.EdgeID)
+						r.mu.Lock()
+						if !r.launchLocked(func() { r.serveCarrier(r.ctx, c, key) }) {
+							_ = c.Close()
+						}
+						r.mu.Unlock()
+					}
+				})
+			case "tls":
+				pair, e := tls.LoadX509KeyPair(r.cfg.CertFile, r.cfg.KeyFile)
+				if e != nil {
+					r.listenerErrors[key] = e.Error()
+					continue
+				}
+				l, e := net.Listen(b.network, addr)
+				if e != nil {
+					r.listenerErrors[key] = e.Error()
+					continue
+				}
+				tc := &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}
+				r.listeners[key] = listenerState{l, "carrier", "", addr}
+				delete(r.listenerErrors, key)
+				r.launchLocked(func() { r.acceptTLS(l, tc, key) })
+			default:
+				r.listenerErrors[key] = "unsupported carrier transport"
 			}
-			l, e := net.Listen("tcp", addr)
-			if e != nil {
-				r.listenerErrors[key] = e.Error()
-				continue
-			}
-			tc := &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, NextProtos: []string{protocol.ALPN}}
-			r.listeners[key] = listenerState{l, "carrier", "", addr}
-			delete(r.listenerErrors, key)
-			r.launchLocked(func() { r.acceptTLS(l, tc, key) })
-		default:
-			r.listenerErrors[key] = "unsupported carrier transport"
 		}
 	}
 	for _, site := range []struct {
@@ -77,33 +72,34 @@ func (r *Runtime) ensureListenersLocked() {
 		if site.port == 0 {
 			continue
 		}
-		key := "site/" + site.kind + "/" + strconv.Itoa(site.port)
-		desired[key] = true
-		if _, ok := r.listeners[key]; ok {
-			continue
-		}
-		addr := net.JoinHostPort(r.cfg.ListenHost, strconv.Itoa(site.port))
-		l, e := net.Listen("tcp", addr)
-		if e != nil {
-			r.listenerErrors[key] = e.Error()
-			continue
-		}
-		srv := &http.Server{Handler: r.HTTPHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
-		if site.kind == "https" {
-			srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: r.siteCertificate, NextProtos: []string{"h2", "http/1.1"}}
-		}
-		r.listeners[key] = listenerState{srv, site.kind, "", addr}
-		delete(r.listenerErrors, key)
-		limited := &limitedListener{Listener: l, slots: make(chan struct{}, r.cfg.MaxConnections), ctx: r.ctx}
-		r.launchLocked(func() {
-			var serveErr error
-			if site.kind == "https" {
-				serveErr = srv.ServeTLS(limited, "", "")
-			} else {
-				serveErr = srv.Serve(limited)
+		for _, b := range r.siteBindings(site.kind, site.port) {
+			key, addr := b.key, b.address
+			desired[key] = true
+			if _, ok := r.listeners[key]; ok {
+				continue
 			}
-			r.listenerStopped(key, srv, serveErr)
-		})
+			l, e := net.Listen(b.network, addr)
+			if e != nil {
+				r.listenerErrors[key] = e.Error()
+				continue
+			}
+			srv := &http.Server{Handler: r.HTTPHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+			if site.kind == "https" {
+				srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: r.siteCertificate, NextProtos: []string{"h2", "http/1.1"}}
+			}
+			r.listeners[key] = listenerState{srv, site.kind, "", addr}
+			delete(r.listenerErrors, key)
+			limited := &limitedListener{Listener: l, slots: r.httpSlots, ctx: r.ctx}
+			r.launchLocked(func() {
+				var serveErr error
+				if site.kind == "https" {
+					serveErr = srv.ServeTLS(limited, "", "")
+				} else {
+					serveErr = srv.Serve(limited)
+				}
+				r.listenerStopped(key, srv, serveErr)
+			})
+		}
 	}
 	for id, rr := range r.rules {
 		if rr.policyError != "" || rr.rule.Protocol != "tcp" && rr.rule.Protocol != "udp" {
@@ -116,7 +112,7 @@ func (r *Runtime) ensureListenersLocked() {
 		}
 		addr := r.ruleAddress(rr.rule)
 		if rr.rule.Protocol == "tcp" {
-			l, e := net.Listen("tcp", addr)
+			l, e := net.Listen("tcp4", addr)
 			if e != nil {
 				r.listenerErrors[key] = e.Error()
 				continue
@@ -125,7 +121,7 @@ func (r *Runtime) ensureListenersLocked() {
 			delete(r.listenerErrors, key)
 			r.launchLocked(func() { r.acceptTCP(id, l) })
 		} else {
-			pc, e := net.ListenPacket("udp", addr)
+			pc, e := net.ListenPacket("udp4", addr)
 			if e != nil {
 				r.listenerErrors[key] = e.Error()
 				continue
@@ -216,17 +212,21 @@ type limitedListener struct {
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
-	select {
-	case l.slots <- struct{}{}:
-	case <-l.ctx.Done():
-		return nil, net.ErrClosed
+	for {
+		c, e := l.Listener.Accept()
+		if e != nil {
+			return nil, e
+		}
+		select {
+		case <-l.ctx.Done():
+			_ = c.Close()
+			return nil, net.ErrClosed
+		case l.slots <- struct{}{}:
+			return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
+		default:
+			_ = c.Close()
+		}
 	}
-	c, e := l.Listener.Accept()
-	if e != nil {
-		<-l.slots
-		return nil, e
-	}
-	return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
 }
 
 type limitedConn struct {

@@ -87,8 +87,8 @@ func validateEdge(e model.Edge) error {
 	if e.HTTPPort < 0 || e.HTTPPort > 65535 || e.HTTPSPort < 0 || e.HTTPSPort > 65535 || e.HTTPPort > 0 && e.HTTPPort == e.HTTPSPort {
 		return errors.New("invalid shared HTTP(S) ports")
 	}
-	if len(e.Endpoints) < 1 || len(e.Endpoints) > 16 {
-		return errors.New("configure 1..16 carrier endpoints")
+	if len(e.Endpoints) != 2 {
+		return errors.New("configure one QUIC/UDP endpoint and one TLS/TCP endpoint; use DNS for dual-stack addresses")
 	}
 	seen := map[string]bool{}
 	for _, ep := range e.Endpoints {
@@ -100,7 +100,7 @@ func validateEdge(e model.Edge) error {
 		if ep.Transport != "quic" && ep.Transport != "tls" {
 			return errors.New("endpoint transport must be quic or tls")
 		}
-		key := ep.Transport + "/" + p
+		key := ep.Transport
 		if seen[key] {
 			return errors.New("duplicate carrier port")
 		}

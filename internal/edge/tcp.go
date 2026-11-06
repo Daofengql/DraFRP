@@ -33,6 +33,9 @@ func (r *Runtime) beginFlow(ctx context.Context, ruleID, peer string) (*flowStat
 	if rr == nil || rr.policyError != "" {
 		return nil, &admissionError{"rule_unavailable", 503, "rule is unavailable"}
 	}
+	if (rr.rule.Protocol == "tcp" || rr.rule.Protocol == "udp") && !source.Addr().Is4() {
+		return nil, &admissionError{"address_family_unsupported", 400, "TCP/UDP forwarding requires an IPv4 visitor"}
+	}
 	if r.snap.Edge.CapacityBPS == 0 {
 		return nil, &admissionError{"edge_overloaded", 503, "edge payload capacity is disabled"}
 	}

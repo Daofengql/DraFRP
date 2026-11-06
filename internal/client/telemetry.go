@@ -2,6 +2,7 @@ package client
 
 import (
 	"drafrp/internal/model"
+	"runtime"
 	"sort"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 // local paths and are retained only in the local diagnostic API.
 func (a *Agent) runtimeStatusLocked() *model.DeviceRuntime {
 	at := time.Now().UTC()
-	out := &model.DeviceRuntime{ReportedAt: at, PreferredTransport: a.cfg.Transport,
+	out := &model.DeviceRuntime{ReportedAt: at, PreferredTransport: a.cfg.Transport, Platform: runtime.GOOS, NetworkMode: a.cfg.NetworkMode,
 		Carriers: []model.DeviceCarrierRuntime{}, Endpoints: []model.DeviceEndpointRuntime{}}
 	if a.closing || !at.Before(a.snap.ExpiresAt) || !at.Before(a.snap.Device.ExpiresAt) {
 		return out
@@ -34,7 +35,8 @@ func (a *Agent) runtimeStatusLocked() *model.DeviceRuntime {
 			continue
 		}
 		x := model.DeviceCarrierRuntime{EdgeID: c.EdgeID, Transport: c.Transport, Address: c.Endpoint.Address,
-			ServerName: c.Endpoint.ServerName, ActiveFlows: int(c.Active()), EstablishedAt: c.EstablishedAt,
+			RemoteAddress: c.RemoteAddress,
+			ServerName:    c.Endpoint.ServerName, ActiveFlows: int(c.Active()), EstablishedAt: c.EstablishedAt,
 			HandshakeMS: float64(c.HandshakeDuration) / float64(time.Millisecond), Quality: c.Quality()}
 		out.ActiveCarriers++
 		out.ActiveFlows += x.ActiveFlows
@@ -51,6 +53,7 @@ func (a *Agent) runtimeStatusLocked() *model.DeviceRuntime {
 		}
 		out.Endpoints = append(out.Endpoints, model.DeviceEndpointRuntime{EdgeID: key.EdgeID,
 			Transport: key.Endpoint.Transport, Address: key.Endpoint.Address, ServerName: key.Endpoint.ServerName,
+			RemoteAddress:  key.RemoteAddress,
 			RecentFailures: h.Failures, RetryAt: h.RetryAt, LastAttempt: h.LastAttempt, LastSuccess: h.LastSuccess,
 			HandshakeMS: float64(h.Handshake) / float64(time.Millisecond), ErrorCode: h.ErrorCode, Probing: h.Probing})
 	}
@@ -79,6 +82,9 @@ func (a *Agent) runtimeStatusLocked() *model.DeviceRuntime {
 		}
 		if a.Address != b.Address {
 			return a.Address < b.Address
+		}
+		if a.RemoteAddress != b.RemoteAddress {
+			return a.RemoteAddress < b.RemoteAddress
 		}
 		return a.ServerName < b.ServerName
 	})

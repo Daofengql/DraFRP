@@ -28,6 +28,8 @@ import (
 
 const ALPN = "drafrp/1"
 const MaxFrame = 64 << 10
+
+// Packet frames carry UDP application payloads, including empty datagrams.
 const MaxPacket = 65507
 
 type Stream interface {
@@ -39,10 +41,12 @@ type Challenge struct {
 	Nonce        string `json:"nonce"`
 	EdgeID       string `json:"edge_id"`
 	ProbeVersion int    `json:"probe_version,omitempty"`
+	ReverseProbe bool   `json:"reverse_probe,omitempty"`
 }
 type admissionHello struct {
-	Version      int `json:"version"`
-	ProbeVersion int `json:"probe_version,omitempty"`
+	Version      int  `json:"version"`
+	ProbeVersion int  `json:"probe_version,omitempty"`
+	ReverseProbe bool `json:"reverse_probe,omitempty"`
 }
 type Proof struct {
 	DeviceID   string    `json:"device_id"`
@@ -64,16 +68,18 @@ func (e *AdmissionError) Error() string {
 }
 
 type Flow struct {
-	RuleID      string `json:"rule_id"`
-	Version     uint64 `json:"version"`
-	ID          uint64 `json:"id"`
-	Protocol    string `json:"protocol"`
-	Peer        string `json:"peer"`
-	Host        string `json:"host,omitempty"`
-	Scheme      string `json:"scheme,omitempty"`
-	Generation  uint64 `json:"generation"`
-	Datagram    bool   `json:"datagram,omitempty"`
-	IngressPort int    `json:"ingress_port,omitempty"`
+	RuleID        string `json:"rule_id"`
+	Version       uint64 `json:"version"`
+	ID            uint64 `json:"id"`
+	Protocol      string `json:"protocol"`
+	Peer          string `json:"peer"`
+	Host          string `json:"host,omitempty"`
+	Scheme        string `json:"scheme,omitempty"`
+	Generation    uint64 `json:"generation"`
+	Datagram      bool   `json:"datagram,omitempty"`
+	IngressPort   int    `json:"ingress_port,omitempty"`
+	DataPath      string `json:"data_path,omitempty"`
+	IPDestination string `json:"ip_destination,omitempty"`
 }
 
 func ID() string {
@@ -173,7 +179,7 @@ func AuthenticateClient(ctx context.Context, c *Carrier, d model.DeviceGrant, ke
 	_ = s.SetDeadline(time.Now().Add(10 * time.Second))
 	// A newly opened QUIC stream is not visible to AcceptStream until it
 	// carries data. Send a bounded preface before waiting for the challenge.
-	if e = WriteJSON(s, admissionHello{Version: model.ProtocolVersion, ProbeVersion: 1}); e != nil {
+	if e = WriteJSON(s, admissionHello{Version: model.ProtocolVersion, ProbeVersion: 1, ReverseProbe: true}); e != nil {
 		return e
 	}
 	var ch Challenge
@@ -197,6 +203,7 @@ func AuthenticateClient(ctx context.Context, c *Carrier, d model.DeviceGrant, ke
 	}
 	c.Device = d
 	c.probe.enabled.Store(ch.ProbeVersion == 1)
+	c.probe.reverse.Store(ch.ProbeVersion == 1 && ch.ReverseProbe)
 	return nil
 }
 func AuthenticateEdge(ctx context.Context, c *Carrier, lookup func(string) (model.DeviceGrant, bool)) error {
@@ -220,6 +227,7 @@ func AuthenticateEdge(ctx context.Context, c *Carrier, lookup func(string) (mode
 	ch := Challenge{Version: 1, Nonce: ID(), EdgeID: c.EdgeID}
 	if hello.ProbeVersion == 1 {
 		ch.ProbeVersion = 1
+		ch.ReverseProbe = hello.ReverseProbe
 	}
 	if e = WriteJSON(s, ch); e != nil {
 		return e
@@ -240,6 +248,7 @@ func AuthenticateEdge(ctx context.Context, c *Carrier, lookup func(string) (mode
 		return e
 	}
 	c.probe.enabled.Store(ch.ProbeVersion == 1)
+	c.probe.reverse.Store(ch.ProbeVersion == 1 && ch.ReverseProbe)
 	return nil
 }
 
@@ -262,6 +271,7 @@ type Carrier struct {
 	// Set by the dialing Agent before publication. This is local observation,
 	// not authority and not an estimate of an application's response time.
 	Endpoint          model.Endpoint
+	RemoteAddress     string
 	EstablishedAt     time.Time
 	HandshakeDuration time.Duration
 	q                 *quic.Conn
@@ -282,6 +292,7 @@ type Carrier struct {
 
 func WrapQUIC(q *quic.Conn, edgeID string) *Carrier {
 	c := &Carrier{q: q, EdgeID: edgeID, Transport: "quic", closed: make(chan struct{}), packets: map[uint64]chan []byte{}, pending: map[[2]uint64]*assembly{}, replays: map[uint64]*replayWindow{}, sendQueue: make(chan outboundPacket, 16)}
+	c.RemoteAddress = q.RemoteAddr().String()
 	go c.receive()
 	go c.sendPackets()
 	return c
@@ -304,7 +315,7 @@ func WrapTLS(conn net.Conn, server bool, edgeID string) (*Carrier, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &Carrier{mux: m, EdgeID: edgeID, Transport: "tls", closed: make(chan struct{}), openSlots: make(chan struct{}, 16)}, nil
+	return &Carrier{mux: m, EdgeID: edgeID, Transport: "tls", RemoteAddress: conn.RemoteAddr().String(), closed: make(chan struct{}), openSlots: make(chan struct{}, 16)}, nil
 }
 func (c *Carrier) Open(ctx context.Context) (Stream, error) {
 	if c.q != nil {

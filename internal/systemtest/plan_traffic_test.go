@@ -38,7 +38,7 @@ func TestPlanTrafficThrottleRejectAndCycle(t *testing.T) {
 	}
 	token := strings.Repeat("plan-traffic-edge-", 3)
 	var node model.Edge
-	browser.api("POST", "/api/v1/edges", map[string]any{"name": "metered-exit", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": []model.Endpoint{{Transport: "tls", Address: address(carrier), ServerName: "edge.test"}}, "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": business, "port_max": business, "max_carriers": 4, "capacity_bps": -1}, &node, 201)
+	browser.api("POST", "/api/v1/edges", map[string]any{"name": "metered-exit", "token": token, "public_host": "127.0.0.1", "listen_host": "127.0.0.1", "endpoints": carrierEndpoints(carrier), "ca_cert": certificate, "http_port": 0, "https_port": 0, "port_min": business, "port_max": business, "max_carriers": 4, "capacity_bps": -1}, &node, 201)
 	runtime := edge.New(edge.Config{CloudURL: browser.url, EdgeID: node.ID, Token: token, CertFile: certFile, KeyFile: keyFile, ListenHost: "127.0.0.1"})
 	t.Cleanup(runtime.Close)
 	agent, err := client.New(client.Config{CloudURL: browser.url, StateDir: t.TempDir(), Transport: "tls_only"})
