@@ -64,7 +64,7 @@ try {
     } finally { $sha.Dispose() }
     $hashFile = Join-Path $outputDir 'SHA256SUMS'
     $encoding = New-Object System.Text.UTF8Encoding
-    [System.IO.File]::WriteAllLines($hashFile, [string[]]$hashes, $encoding)
+[System.IO.File]::WriteAllText($hashFile, (($hashes -join "`n") + "`n"), $encoding)
     Write-Output $outputDir
 } finally {
     $env:GOOS, $env:GOARCH, $env:CGO_ENABLED, $env:DRAFRP_BUILD_ID = $previousOS, $previousArch, $previousCGO, $previousBuild
