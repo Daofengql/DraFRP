@@ -106,7 +106,7 @@ HTTP(S) 经普通连接池回源，按可信 peer 逐请求清除并重建来源
 - 新增两端 Linux TUN、出口 DNAT/反向 conntrack 与客户端精确回流；保留访客原始 TCP 握手、序列/ACK/半关闭和 UDP 报文。仅开放经过内核回流验证的 IPv4 TCP/UDP 能力，Windows 不支持。
 - 继续执行规则/设备/会话授权、ACL、目标允许列表、账号与节点预算；两端逐包检查绑定五元组。TUN 按内层 IPv4 字节计量，累计与分钟历史保持一致。
 - 支持有界 IPv4 分片重组、QUIC DATAGRAM 与 TLS 封帧、权限拒绝、元组冲突、接口故障停用、精确回流保护、所有权清理与崩溃恢复。规则停用精确移除自身 conntrack 项。
-- Hyper-V Ubuntu 独立 edge/agent/LAN 目标命名空间验证 QUIC/TLS × TCP/UDP、128 KiB TCP、60KB/零长度 UDP、原始访客 IP/端口、半关闭、撤销和清理；使用独立 MySQL，不运行公网/性能/长期压力测试。验证记录位于 `docs/validation/2026-10-31/`。
+- Hyper-V Ubuntu 独立 edge/agent/LAN 目标命名空间验证 QUIC/TLS × TCP/UDP、128 KiB TCP、60KB/零长度 UDP、原始访客 IP/端口、半关闭、撤销和清理；使用独立 MySQL，不运行公网、性能或长期压力测试。原始验证材料未纳入发布。
 
 ## 2026-11-01 Linux 客户端 TUN
 
